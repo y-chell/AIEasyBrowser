@@ -1,0 +1,43 @@
+name: Extension Typecheck
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  extension-typecheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        run: npm install --global pnpm@8.15.9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build shared package
+        run: pnpm build:shared
+
+      - name: Prepare extension types
+        run: pnpm --filter aieasybrowser-extension exec wxt prepare
+
+      - name: Typecheck extension
+        run: pnpm typecheck:extension
+
+      - name: Run browser bridge tests
+        run: pnpm test

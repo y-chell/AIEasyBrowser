@@ -1,0 +1,2212 @@
+import { type Tool, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+
+export const TOOL_NAMES = {
+  BROWSER: {
+    HEALTH: 'chrome_health',
+    GET_WINDOWS_AND_TABS: 'get_windows_and_tabs',
+    LIST_FRAMES: 'chrome_list_frames',
+    SCAN_COMPACT: 'chrome_scan_compact',
+    SEARCH_TABS_CONTENT: 'search_tabs_content',
+    NAVIGATE: 'chrome_navigate',
+    SCREENSHOT: 'chrome_screenshot',
+    CLOSE_TABS: 'chrome_close_tabs',
+    SWITCH_TAB: 'chrome_switch_tab',
+    TAB_GROUP: 'chrome_tab_group',
+    WEB_FETCHER: 'chrome_get_web_content',
+    CLICK: 'chrome_click_element',
+    FILL: 'chrome_fill_or_select',
+    GET_INTERACTIVE_ELEMENTS: 'chrome_get_interactive_elements',
+    NETWORK_CAPTURE: 'chrome_network_capture',
+    // Legacy tool names (kept for internal use, not exposed in TOOL_SCHEMAS)
+    NETWORK_CAPTURE_START: 'chrome_network_capture_start',
+    NETWORK_CAPTURE_STOP: 'chrome_network_capture_stop',
+    NETWORK_REQUEST: 'chrome_network_request',
+    NETWORK_DEBUGGER_START: 'chrome_network_debugger_start',
+    NETWORK_DEBUGGER_STOP: 'chrome_network_debugger_stop',
+    KEYBOARD: 'chrome_keyboard',
+    HISTORY: 'chrome_history',
+    BOOKMARK_SEARCH: 'chrome_bookmark_search',
+    BOOKMARK_ADD: 'chrome_bookmark_add',
+    BOOKMARK_DELETE: 'chrome_bookmark_delete',
+    INJECT_SCRIPT: 'chrome_inject_script',
+    SEND_COMMAND_TO_INJECT_SCRIPT: 'chrome_send_command_to_inject_script',
+    JAVASCRIPT: 'chrome_javascript',
+    CDP_COMMAND: 'chrome_cdp_command',
+    CDP_BATCH: 'chrome_cdp_batch',
+    CONSOLE: 'chrome_console',
+    COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
+    FILE_UPLOAD: 'chrome_upload_file',
+    GET_UPLOAD_STATUS: 'chrome_get_upload_status',
+    READ_PAGE: 'chrome_read_page',
+    QUERY_ELEMENTS: 'chrome_query_elements',
+    GET_ELEMENT_HTML: 'chrome_get_element_html',
+    COMPUTER: 'chrome_computer',
+    CLIPBOARD: 'chrome_clipboard',
+    WAIT_FOR_TAB: 'chrome_wait_for_tab',
+    WAIT_FOR: 'chrome_wait_for',
+    ASSERT: 'chrome_assert',
+    HANDLE_DIALOG: 'chrome_handle_dialog',
+    HANDLE_DOWNLOAD: 'chrome_handle_download',
+    USERSCRIPT: 'chrome_userscript',
+    PERFORMANCE_START_TRACE: 'performance_start_trace',
+    PERFORMANCE_STOP_TRACE: 'performance_stop_trace',
+    PERFORMANCE_ANALYZE_INSIGHT: 'performance_analyze_insight',
+  },
+};
+
+const RAW_TOOL_SCHEMAS: Tool[] = [
+  {
+    name: TOOL_NAMES.BROWSER.HEALTH,
+    description:
+      'Return extension/bridge health metadata, schema hash, tool count, extension ID, and current browser tab/window counts. Use this after upgrades to confirm the client is not using a stale tool list.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS,
+    description: 'Get all currently open browser windows and tabs',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.LIST_FRAMES,
+    description:
+      'List frames in a tab, including frame hierarchy, URLs, titles, and lightweight readiness/interactive signals. Use returned frameId values with tools that accept frameId.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        includeDetails: {
+          type: 'boolean',
+          description:
+            'Include per-frame title, readyState, and interactive-element signals (default: true).',
+        },
+      },
+      required: [],
+    },
+  },
+  // {
+  //   name: TOOL_NAMES.RECORD_REPLAY.FLOW_RUN,
+  //   description:
+  //     'Run a recorded flow by ID with optional variables and run options. Returns a standardized run result.',
+  //   inputSchema: {
+  //     type: 'object',
+  //     properties: {
+  //       flowId: { type: 'string', description: 'ID of the flow to run' },
+  //       args: {
+  //         type: 'object',
+  //         description: 'Variable values for the flow (flat object of key/value)',
+  //       },
+  //       tabTarget: {
+  //         type: 'string',
+  //         description: "Target tab: 'current' or 'new' (default: current)",
+  //         enum: ['current', 'new'],
+  //       },
+  //       refresh: { type: 'boolean', description: 'Refresh before running (default false)' },
+  //       captureNetwork: {
+  //         type: 'boolean',
+  //         description: 'Capture network snippets for debugging (default false)',
+  //       },
+  //       returnLogs: { type: 'boolean', description: 'Return run logs (default false)' },
+  //       timeoutMs: { type: 'number', description: 'Global timeout in ms (optional)' },
+  //       startUrl: { type: 'string', description: 'Optional start URL to open before running' },
+  //     },
+  //     required: ['flowId'],
+  //   },
+  // },
+  // {
+  //   name: TOOL_NAMES.RECORD_REPLAY.LIST_PUBLISHED,
+  //   description: 'List published flows available as dynamic tools (for discovery).',
+  //   inputSchema: {
+  //     type: 'object',
+  //     properties: {},
+  //     required: [],
+  //   },
+  // },
+  {
+    name: TOOL_NAMES.BROWSER.PERFORMANCE_START_TRACE,
+    description:
+      'Starts a performance trace recording on the selected page. Optionally reloads the page and/or auto-stops after a short duration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reload: {
+          type: 'boolean',
+          description:
+            'Determines if, once tracing has started, the page should be automatically reloaded (ignore cache).',
+        },
+        autoStop: {
+          type: 'boolean',
+          description: 'Determines if the trace should be automatically stopped (default false).',
+        },
+        durationMs: {
+          type: 'number',
+          description: 'Auto-stop duration in milliseconds when autoStop is true (default 5000).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.PERFORMANCE_STOP_TRACE,
+    description: 'Stops the active performance trace recording on the selected page.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        saveToDownloads: {
+          type: 'boolean',
+          description: 'Whether to save the trace as a JSON file in Downloads (default true).',
+        },
+        filenamePrefix: {
+          type: 'string',
+          description: 'Optional filename prefix for the downloaded trace JSON.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.PERFORMANCE_ANALYZE_INSIGHT,
+    description:
+      'Provides a lightweight summary of the last recorded trace. For deep insights (CWV, breakdowns), integrate native-side DevTools trace engine.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        insightName: {
+          type: 'string',
+          description:
+            'Optional insight name for future deep analysis (e.g., "DocumentLatency"). Currently informational only.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description:
+            'Timeout for deep analysis via native host (milliseconds). Default 60000. Increase for large traces.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.SCAN_COMPACT,
+    description:
+      'Return a compact page scan for agents: title, URL, important text blocks, forms, buttons, inputs, selects, dialogs/overlays, iframes, and stable element refs. Use this before chrome_read_page when you need a low-token overview of what can be operated on.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description:
+            'Optional frame ID. When omitted, scans all readable frames and includes frameId on each result.',
+        },
+        maxElements: {
+          type: 'number',
+          description:
+            'Maximum interactive/form/dialog/iframe elements to return (default 80, max 200).',
+        },
+        maxTextBlocks: {
+          type: 'number',
+          description: 'Maximum heading/paragraph text blocks to return (default 20, max 80).',
+        },
+        includeTextBlocks: {
+          type: 'boolean',
+          description: 'Include compact heading/paragraph text blocks (default true).',
+        },
+        includeIframes: {
+          type: 'boolean',
+          description: 'Include iframe summaries (default true).',
+        },
+        includeCoordinates: {
+          type: 'boolean',
+          description: 'Include viewport center coordinates for returned elements (default true).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.READ_PAGE,
+    description:
+      'Get an accessibility tree representation of visible elements on the page. Only returns elements that are visible in the viewport. Optionally filter for only interactive elements.\nTip: If the returned elements do not include the specific element you need, use the computer tool\'s screenshot (action="screenshot") to capture the element\'s on-screen coordinates, then operate by coordinates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filter: {
+          type: 'string',
+          description:
+            'Filter elements: "interactive" for such as  buttons/links/inputs only (default: all visible elements)',
+        },
+        depth: {
+          type: 'number',
+          description:
+            'Maximum DOM depth to traverse (integer >= 0). Lower values reduce output size and can improve performance.',
+        },
+        refId: {
+          type: 'string',
+          description:
+            'Focus on the subtree rooted at this element refId (e.g., "ref_12"). The refId must come from a recent chrome_read_page response in the same tab (refs may expire).',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.QUERY_ELEMENTS,
+    description:
+      'Query DOM elements directly and return a structured element list, including hidden elements when requested. Useful when chrome_read_page is too high-level and you need refs, attributes, visibility, enabled state, exact DOM matches, or frame-aware results. CSS queries traverse open shadow roots; XPath does not cross shadow roots.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description: 'CSS or XPath selector to query.',
+        },
+        selectorType: {
+          type: 'string',
+          enum: ['css', 'xpath'],
+          description: 'Selector syntax (default: css). XPath does not cross shadow roots.',
+        },
+        refId: {
+          type: 'string',
+          description:
+            'Optional root ref from chrome_read_page. When provided, only query inside that element subtree.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Optional frame ID. When omitted, searches all readable frames in the tab.',
+        },
+        includeHidden: {
+          type: 'boolean',
+          description: 'Include hidden elements in the result (default: false).',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of returned elements (default: 25, max: 200).',
+        },
+      },
+      required: ['selector'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.GET_ELEMENT_HTML,
+    description:
+      'Get the real DOM HTML for a specific element, including hidden elements. Accepts a ref from chrome_read_page or a selector, and returns outerHTML by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: {
+          type: 'string',
+          description: 'Element ref from chrome_read_page or chrome_query_elements.',
+        },
+        refId: {
+          type: 'string',
+          description: 'Alias of ref for compatibility with read_page-style naming.',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS or XPath selector for the target element.',
+        },
+        selectorType: {
+          type: 'string',
+          enum: ['css', 'xpath'],
+          description: 'Selector syntax (default: css). XPath does not cross shadow roots.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description:
+            'Optional frame ID. When omitted, refs use remembered frame routing and selectors search all readable frames.',
+        },
+        includeOuterHtml: {
+          type: 'boolean',
+          description: 'Return outerHTML when true, innerHTML when false (default: true).',
+        },
+        maxLength: {
+          type: 'number',
+          description: 'Maximum returned HTML length in characters (default: 20000, max: 200000).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.COMPUTER,
+    description:
+      'Use a mouse and keyboard to interact with a web browser, and take screenshots.\n* Prefer chrome_scan_compact, chrome_read_page, refs, or selectors before using coordinates. If you use coordinates, capture the current viewport first and click the element center.\n* Coordinates are viewport CSS pixels for the current tab. Chrome debugger attach/infobar or layout changes can shift the page, so recapture before precise clicks.\n* Use this or chrome_cdp_command/chrome_cdp_batch when JavaScript DOM events are ignored because event.isTrusted is false.\n* If a click does not load after waiting, take a screenshot and adjust the click point so the cursor tip is centered on the target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'Target tab ID (default: active tab)' },
+        background: {
+          type: 'boolean',
+          description:
+            'Avoid focusing/activating tab/window for certain operations (best-effort). Default: false',
+        },
+        action: {
+          type: 'string',
+          description:
+            'Action to perform: left_click | right_click | double_click | triple_click | left_click_drag | scroll | scroll_to | type | key | fill | fill_form | hover | wait | resize_page | zoom | screenshot',
+        },
+        ref: {
+          type: 'string',
+          description:
+            'Element ref from chrome_read_page. For click/scroll/scroll_to/key/type and drag end when provided; takes precedence over coordinates.',
+        },
+        coordinates: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'X coordinate' },
+            y: { type: 'number', description: 'Y coordinate' },
+          },
+          description:
+            'Coordinates for actions (in screenshot space if a recent screenshot was taken, otherwise viewport). Required for click/scroll and as end point for drag.',
+        },
+        startCoordinates: {
+          type: 'object',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+          },
+          description: 'Starting coordinates for drag action',
+        },
+        startRef: {
+          type: 'string',
+          description: 'Drag start ref from chrome_read_page (alternative to startCoordinates).',
+        },
+        startSelector: {
+          type: 'string',
+          description: 'CSS/XPath selector for the drag start element.',
+        },
+        endSelector: {
+          type: 'string',
+          description:
+            'CSS/XPath selector for the drag end element. If omitted, selector is treated as the end selector.',
+        },
+        dragSteps: {
+          type: 'number',
+          description: 'For action=left_click_drag: number of intermediate mouse moves (2-60).',
+        },
+        dragDurationMs: {
+          type: 'number',
+          description:
+            'For action=left_click_drag: total time spent moving between points in milliseconds (0-5000).',
+        },
+        scrollDirection: {
+          type: 'string',
+          description: 'Scroll direction: up | down | left | right',
+        },
+        scrollAmount: {
+          type: 'number',
+          description: 'Scroll ticks (1-10), default 3',
+        },
+        text: {
+          type: 'string',
+          description:
+            'Text to type (for action=type) or keys/chords separated by space (for action=key, e.g. "Backspace Enter" or "cmd+a")',
+        },
+        repeat: {
+          type: 'number',
+          description:
+            'For action=key: number of times to repeat the key sequence (integer 1-100, default 1).',
+        },
+        modifiers: {
+          type: 'object',
+          description:
+            'Modifier keys for click actions (left_click/right_click/double_click/triple_click).',
+          properties: {
+            altKey: { type: 'boolean' },
+            ctrlKey: { type: 'boolean' },
+            metaKey: { type: 'boolean' },
+            shiftKey: { type: 'boolean' },
+          },
+        },
+        region: {
+          type: 'object',
+          description:
+            'For action=zoom: rectangular region to capture (x0,y0)-(x1,y1) in viewport pixels (or screenshot-space if a recent screenshot context exists).',
+          properties: {
+            x0: { type: 'number' },
+            y0: { type: 'number' },
+            x1: { type: 'number' },
+            y1: { type: 'number' },
+          },
+          required: ['x0', 'y0', 'x1', 'y1'],
+        },
+        // For action=fill
+        selector: {
+          type: 'string',
+          description:
+            'CSS/XPath selector for fill, hover, click, or wait actions (use selectorType to choose).',
+        },
+        value: {
+          oneOf: [{ type: 'string' }, { type: 'boolean' }, { type: 'number' }],
+          description: 'Value to set for action=fill (string | boolean | number)',
+        },
+        elements: {
+          type: 'array',
+          description:
+            'For action=fill_form: list of elements to fill. Each item may use ref or selector.',
+          items: {
+            type: 'object',
+            properties: {
+              ref: { type: 'string', description: 'Element ref from chrome_read_page' },
+              selector: { type: 'string', description: 'CSS/XPath selector for this field' },
+              selectorType: {
+                type: 'string',
+                enum: ['css', 'xpath'],
+                description: 'Selector syntax for this field (default: css)',
+              },
+              frameId: { type: 'number', description: 'Optional target frame ID' },
+              value: {
+                oneOf: [{ type: 'string' }, { type: 'boolean' }, { type: 'number' }],
+                description: 'Value to set',
+              },
+            },
+            required: ['value'],
+          },
+        },
+        continueOnError: {
+          type: 'boolean',
+          description: 'For action=fill_form: continue filling remaining fields after an error.',
+        },
+        width: { type: 'number', description: 'For action=resize_page: viewport width' },
+        height: { type: 'number', description: 'For action=resize_page: viewport height' },
+        appear: {
+          type: 'boolean',
+          description:
+            'For action=wait with text: whether to wait for the text to appear (true, default) or disappear (false)',
+        },
+        visible: {
+          type: 'boolean',
+          description:
+            'For action=wait with selector: whether to wait for the selector to be visible (true, default) or hidden/missing (false).',
+        },
+        clickable: {
+          type: 'boolean',
+          description:
+            'For action=wait with ref/selector: wait until the target is clickable (visible, enabled, pointer-events active).',
+        },
+        download: {
+          type: 'boolean',
+          description: 'For action=wait: wait for a browser download started after this call.',
+        },
+        filenameContains: {
+          type: 'string',
+          description: 'For action=wait with download: match filename or URL substring.',
+        },
+        waitForComplete: {
+          type: 'boolean',
+          description:
+            'For action=wait with download: whether to wait for completion (default true).',
+        },
+        network: {
+          type: 'boolean',
+          description: 'For action=wait: wait for any matching network request to finish.',
+        },
+        urlPattern: {
+          type: 'string',
+          description: 'For action=wait with network: URL substring to match.',
+        },
+        method: {
+          type: 'string',
+          description: 'For action=wait with network: HTTP method to match.',
+        },
+        status: {
+          type: 'number',
+          description: 'For action=wait with network: HTTP status code to match.',
+        },
+        includeStatic: {
+          type: 'boolean',
+          description:
+            'For action=wait with network: whether to include static resources while capturing.',
+        },
+        timeout: {
+          type: 'number',
+          description:
+            'For action=wait with text/selector/ref/download/network: timeout in milliseconds (default 10000, max 120000)',
+        },
+        duration: {
+          type: 'number',
+          description: 'Seconds to wait for action=wait (max 30s)',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CLIPBOARD,
+    description:
+      'Read, write, copy, or paste text through the browser clipboard/page. Uses focused page clipboard APIs first when possible, then offscreen/fallback paths.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['read_text', 'write_text', 'paste_text', 'copy_selection'],
+          description:
+            'read_text reads the clipboard, write_text writes text, paste_text inserts text into a page target, copy_selection returns selected/target text and marks partialSuccess if system clipboard write is blocked.',
+        },
+        text: {
+          type: 'string',
+          description:
+            'Text for write_text or paste_text. paste_text reads clipboard when omitted.',
+        },
+        ref: {
+          type: 'string',
+          description: 'Element ref from chrome_read_page for paste_text/copy_selection target.',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS/XPath selector for paste_text/copy_selection target.',
+        },
+        selectorType: {
+          type: 'string',
+          enum: ['css', 'xpath'],
+          description: 'Selector syntax (default: css).',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID for page-aware copy/paste (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Target frame ID for page-aware copy/paste.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
+    description:
+      'Wait for a newly opened tab (or a specifically matched tab) and return its identity. Useful after clicks that open a payment/login/OAuth tab or pop a new browser window.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        openerTabId: {
+          type: 'number',
+          description:
+            'Optional opener/source tab ID. Helps identify tabs opened by the current workflow, including ones that already opened just before this tool call.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Optional window ID filter. When omitted, tabs from any window can match.',
+        },
+        urlPattern: {
+          type: 'string',
+          description: 'Optional URL matcher string.',
+        },
+        titlePattern: {
+          type: 'string',
+          description: 'Optional title matcher string.',
+        },
+        match: {
+          type: 'string',
+          enum: ['contains', 'equals', 'regex'],
+          description: 'String match mode for urlPattern/titlePattern (default: contains).',
+        },
+        status: {
+          type: 'string',
+          enum: ['any', 'loading', 'complete'],
+          description: 'Desired tab load status (default: complete).',
+        },
+        active: {
+          type: 'boolean',
+          description: 'Optional active-tab filter.',
+        },
+        includeExisting: {
+          type: 'boolean',
+          description:
+            'Allow an already-open matching tab to be returned immediately. Best used together with openerTabId or a strong matcher.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Overall timeout in milliseconds (default: 10000, max: 120000).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.WAIT_FOR,
+    description:
+      'Wait for a browser condition to become true. Prefer this over ad-hoc polling JS for common checks such as element visibility, text changes, URL/title changes, JS predicates, network requests, network idle, and downloads.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'Target tab ID (default: active tab)' },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick the active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Optional frame ID for selector/javascript waits.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Overall timeout in milliseconds (default: 10000, max: 120000).',
+        },
+        pollIntervalMs: {
+          type: 'number',
+          description:
+            'Polling interval in milliseconds for url/title/javascript/exists waits (default: 200).',
+        },
+        includeStatic: {
+          type: 'boolean',
+          description:
+            'For condition.kind="network": whether to include document/static responses while capturing.',
+        },
+        condition: {
+          type: 'object',
+          description:
+            'Condition descriptor. Supported kinds: element, text, url, title, javascript, network, networkIdle, download, sleep.',
+          properties: {
+            kind: {
+              type: 'string',
+              enum: [
+                'element',
+                'text',
+                'url',
+                'title',
+                'javascript',
+                'network',
+                'networkIdle',
+                'download',
+                'sleep',
+              ],
+            },
+            selector: { type: 'string', description: 'For kind="element": CSS/XPath selector.' },
+            ref: {
+              type: 'string',
+              description:
+                'For kind="element" with state="clickable": element ref from chrome_read_page.',
+            },
+            selectorType: {
+              type: 'string',
+              enum: ['css', 'xpath'],
+              description: 'For kind="element": selector syntax (default: css).',
+            },
+            state: {
+              type: 'string',
+              enum: ['exists', 'visible', 'hidden', 'clickable'],
+              description: 'For kind="element": desired state (default: visible).',
+            },
+            text: { type: 'string', description: 'For kind="text": target text.' },
+            present: {
+              type: 'boolean',
+              description:
+                'For kind="text": whether the text should be present/appear (true, default) or disappear (false).',
+            },
+            value: {
+              type: 'string',
+              description:
+                'For kind="url" or kind="title": expected string/pattern. Omit when match="changed".',
+            },
+            match: {
+              type: 'string',
+              enum: ['contains', 'equals', 'regex', 'changed'],
+              description:
+                'For kind="url" or kind="title": matching mode (default: contains, or changed when value is omitted).',
+            },
+            predicate: {
+              type: 'string',
+              description:
+                'For kind="javascript": JS expression or function that should evaluate to a truthy value in page context.',
+            },
+            urlPattern: {
+              type: 'string',
+              description: 'For kind="network": URL substring to match.',
+            },
+            method: { type: 'string', description: 'For kind="network": HTTP method to match.' },
+            status: {
+              type: 'number',
+              description: 'For kind="network": HTTP status code to match.',
+            },
+            idleMs: {
+              type: 'number',
+              description: 'For kind="networkIdle": idle threshold in milliseconds.',
+            },
+            filenameContains: {
+              type: 'string',
+              description: 'For kind="download": filename or URL substring to match.',
+            },
+            waitForComplete: {
+              type: 'boolean',
+              description: 'For kind="download": whether to wait for completion (default: true).',
+            },
+            durationMs: {
+              type: 'number',
+              description: 'For kind="sleep": how long to wait in milliseconds (max: 30000).',
+            },
+          },
+          required: ['kind'],
+        },
+      },
+      required: ['condition'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.ASSERT,
+    description:
+      'Assert that a browser condition becomes true within the timeout. Uses the same condition schema as chrome_wait_for, but returns an assertion-style result and fails clearly when the condition is not met.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'Target tab ID (default: active tab)' },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick the active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Optional frame ID for selector/javascript assertions.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Overall timeout in milliseconds (default: 10000, max: 120000).',
+        },
+        pollIntervalMs: {
+          type: 'number',
+          description:
+            'Polling interval in milliseconds for url/title/javascript/exists assertions (default: 200).',
+        },
+        includeStatic: {
+          type: 'boolean',
+          description:
+            'For condition.kind="network": whether to include document/static responses while capturing.',
+        },
+        condition: {
+          type: 'object',
+          description: 'Same condition schema as chrome_wait_for. sleep is not allowed.',
+          properties: {
+            kind: {
+              type: 'string',
+              enum: [
+                'element',
+                'text',
+                'url',
+                'title',
+                'javascript',
+                'network',
+                'networkIdle',
+                'download',
+              ],
+            },
+            selector: { type: 'string' },
+            ref: { type: 'string' },
+            selectorType: { type: 'string', enum: ['css', 'xpath'] },
+            state: { type: 'string', enum: ['exists', 'visible', 'hidden', 'clickable'] },
+            text: { type: 'string' },
+            present: { type: 'boolean' },
+            value: { type: 'string' },
+            match: { type: 'string', enum: ['contains', 'equals', 'regex', 'changed'] },
+            predicate: { type: 'string' },
+            urlPattern: { type: 'string' },
+            method: { type: 'string' },
+            status: { type: 'number' },
+            idleMs: { type: 'number' },
+            filenameContains: { type: 'string' },
+            waitForComplete: { type: 'boolean' },
+          },
+          required: ['kind'],
+        },
+      },
+      required: ['condition'],
+    },
+  },
+  // {
+  //   name: TOOL_NAMES.BROWSER.USERSCRIPT,
+  //   description:
+  //     'Unified userscript tool (create/list/get/enable/disable/update/remove/send_command/export). Paste JS/CSS/Tampermonkey script and the system will auto-select the best strategy (insertCSS / persistent script in ISOLATED or MAIN world / once by CDP) with CSP-aware fallbacks.',
+  //   inputSchema: {
+  //     type: 'object',
+  //     properties: {
+  //       action: {
+  //         type: 'string',
+  //         description:
+  //           'Operation to perform',
+  //         enum: [
+  //           'create',
+  //           'list',
+  //           'get',
+  //           'enable',
+  //           'disable',
+  //           'update',
+  //           'remove',
+  //           'send_command',
+  //           'export',
+  //         ],
+  //       },
+  //       args: {
+  //         type: 'object',
+  //         description:
+  //           'Arguments for the specified action.\n- create: { script (required), name?, description?, matches?: string[], excludes?: string[], persist?: boolean (default true), runAt?: "document_start"|"document_end"|"document_idle"|"auto", world?: "auto"|"ISOLATED"|"MAIN", allFrames?: boolean (default true), mode?: "auto"|"css"|"persistent"|"once", dnrFallback?: boolean (default true), tags?: string[] }\n- list: { query?: string, status?: "enabled"|"disabled", domain?: string }\n- get: { id (required) }\n- enable/disable: { id (required) }\n- update: { id (required), script?, name?, description?, matches?, excludes?, runAt?, world?, allFrames?, persist?, dnrFallback?, tags? }\n- remove: { id (required) }\n- send_command: { id (required), payload?: string, tabId?: number }\n- export: {}\nTip: For a one-off execution that returns a value, use create with args.mode="once". The returned value is included as onceResult in the tool response.',
+  //         properties: {
+  //           // Common identifiers
+  //           id: { type: 'string', description: 'Userscript id (for get/enable/disable/update/remove/send_command)' },
+  //           // Create / Update fields
+  //           script: { type: 'string', description: 'JS/CSS/Tampermonkey script source (required for create)' },
+  //           name: { type: 'string', description: 'Userscript name (optional)' },
+  //           description: { type: 'string', description: 'Userscript description (optional)' },
+  //           matches: {
+  //             type: 'array',
+  //             items: { type: 'string' },
+  //             description: 'Match patterns for pages to apply to (e.g., https://*.example.com/*)'
+  //           },
+  //           excludes: {
+  //             type: 'array',
+  //             items: { type: 'string' },
+  //             description: 'Exclude patterns'
+  //           },
+  //           persist: { type: 'boolean', description: 'Persist userscript for matched pages (default true)' },
+  //           runAt: {
+  //             type: 'string',
+  //             description: 'Injection timing',
+  //             enum: ['document_start', 'document_end', 'document_idle', 'auto'],
+  //           },
+  //           world: {
+  //             type: 'string',
+  //             description: 'Execution world',
+  //             enum: ['auto', 'ISOLATED', 'MAIN'],
+  //           },
+  //           allFrames: { type: 'boolean', description: 'Inject into all frames (default true)' },
+  //           mode: {
+  //             type: 'string',
+  //             description:
+  //               'Injection strategy: auto | css | persistent | once. Use once to evaluate immediately (no persistence) and include the return value in onceResult.',
+  //             enum: ['auto', 'css', 'persistent', 'once'],
+  //           },
+  //           dnrFallback: { type: 'boolean', description: 'Use DNR fallback when needed (default true)' },
+  //           tags: { type: 'array', items: { type: 'string' }, description: 'Custom tags' },
+  //           // List filters
+  //           query: { type: 'string', description: 'Search by name/description (list action)' },
+  //           status: { type: 'string', enum: ['enabled', 'disabled'], description: 'Filter by status (list action)' },
+  //           domain: { type: 'string', description: 'Filter by domain (list action)' },
+  //           // Send command
+  //           payload: { type: 'string', description: 'Arbitrary payload (stringified) for send_command' },
+  //           tabId: { type: 'number', description: 'Target tab for send_command (default active tab)' },
+  //         },
+  //       },
+  //     },
+  //     required: ['action'],
+  //   },
+  // },
+  {
+    name: TOOL_NAMES.BROWSER.NAVIGATE,
+    description:
+      'Navigate to a URL, refresh the current tab, or navigate browser history (back/forward)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description:
+            'URL to navigate to. Special values: "back" or "forward" to navigate browser history in the target tab.',
+        },
+        newWindow: {
+          type: 'boolean',
+          description: 'Create a new window to navigate to the URL or not. Defaults to false',
+        },
+        tabId: {
+          type: 'number',
+          description:
+            'Target an existing tab by ID (if provided, navigate/refresh/back/forward that tab instead of the active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description:
+            'Target an existing window by ID (when creating a new tab in existing window, or picking active tab if tabId is not provided).',
+        },
+        background: {
+          type: 'boolean',
+          description:
+            'Perform the operation without stealing focus (do not activate the tab or focus the window). Default: false',
+        },
+        width: {
+          type: 'number',
+          description:
+            'Window width in pixels (default: 1280). When width or height is provided, a new window will be created.',
+        },
+        height: {
+          type: 'number',
+          description:
+            'Window height in pixels (default: 720). When width or height is provided, a new window will be created.',
+        },
+        refresh: {
+          type: 'boolean',
+          description:
+            'Refresh the current active tab instead of navigating to a URL. When true, the url parameter is ignored. Defaults to false',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.SCREENSHOT,
+    description:
+      '[Prefer read_page over taking a screenshot and Prefer chrome_computer] Take a screenshot of the current page or a specific element. For new usage, use chrome_computer with action="screenshot". Use this tool if you need advanced options. Screenshot output can be resized when storeBase64/maxOutputWidth/maxOutputHeight are used; recapture the current viewport before reusing coordinates for clicks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Name for the screenshot, if saving as PNG' },
+        selector: { type: 'string', description: 'CSS selector for element to screenshot' },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID to capture from (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab from when tabId is not provided.',
+        },
+        background: {
+          type: 'boolean',
+          description:
+            'Attempt capture without bringing tab/window to foreground. CDP-based capture is used for viewport captures and default full-page captures. Full-page captures with custom width/height/maxHeight, and element captures, fall back to helper-based capture. Default: false',
+        },
+        width: { type: 'number', description: 'Width in pixels (default: 800)' },
+        height: { type: 'number', description: 'Height in pixels (default: 600)' },
+        storeBase64: {
+          type: 'boolean',
+          description:
+            'Return screenshot data inline as compressed base64 (default: false). When true and savePng is omitted, the tool avoids saving a file by default to stay agent-friendly.',
+        },
+        fullPage: {
+          type: 'boolean',
+          description: 'Capture the entire page instead of just the viewport (default: false).',
+        },
+        savePng: {
+          type: 'boolean',
+          description:
+            'Save screenshot as a PNG file in Downloads. Default: true, except when storeBase64=true and savePng is omitted, in which case it defaults to false.',
+        },
+        imageFormat: {
+          type: 'string',
+          enum: ['image/jpeg', 'image/webp'],
+          description: 'Inline base64 image format when storeBase64=true (default: image/jpeg).',
+        },
+        quality: {
+          type: 'number',
+          description:
+            'Inline base64 compression quality from 0.3 to 0.95. Lower means smaller output.',
+        },
+        maxOutputWidth: {
+          type: 'number',
+          description:
+            'Inline base64 max width in pixels. Helps keep screenshots small for model input.',
+        },
+        maxOutputHeight: {
+          type: 'number',
+          description:
+            'Inline base64 max height in pixels. Full-page captures are downscaled by default unless overridden.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CLOSE_TABS,
+    description: 'Close one or more browser tabs',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabIds: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Array of tab IDs to close. If not provided, will close the active tab.',
+        },
+        url: {
+          type: 'string',
+          description: 'Close tabs matching this URL. Can be used instead of tabIds.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.SWITCH_TAB,
+    description: 'Switch to a specific browser tab',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: {
+          type: 'number',
+          description: 'The ID of the tab to switch to.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'The ID of the window where the tab is located.',
+        },
+      },
+      required: ['tabId'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.TAB_GROUP,
+    description:
+      'Manage Chrome tab groups. Use it to group related tabs, rename/color groups, collapse groups, list groups, move groups, or ungroup tabs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'create', 'update', 'move', 'ungroup'],
+          description:
+            'list returns groups and their tabs; create groups tabIds; update changes title/color/collapsed; move reorders a group; ungroup removes tabs from a group.',
+        },
+        tabIds: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Tab IDs for create or ungroup.',
+        },
+        groupId: {
+          type: 'number',
+          description: 'Chrome tab group ID for update/move/ungroup, or to filter list.',
+        },
+        title: {
+          type: 'string',
+          description: 'Group title for create/update.',
+        },
+        color: {
+          type: 'string',
+          enum: ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'],
+          description: 'Group color for create/update.',
+        },
+        collapsed: {
+          type: 'boolean',
+          description: 'Whether the group is collapsed for create/update.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Window ID for list/create/move.',
+        },
+        index: {
+          type: 'number',
+          description: 'Target group index for move.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.WEB_FETCHER,
+    description: 'Fetch content from a web page',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL to fetch content from. If not provided, uses the current active tab',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        background: {
+          type: 'boolean',
+          description: 'Do not activate tab/focus window while fetching (default: false)',
+        },
+        htmlContent: {
+          type: 'boolean',
+          description:
+            'Get the visible HTML content of the page. If true, textContent will be ignored (default: false)',
+        },
+        textContent: {
+          type: 'boolean',
+          description:
+            'Get the visible text content of the page with metadata. Ignored if htmlContent is true (default: true)',
+        },
+
+        selector: {
+          type: 'string',
+          description:
+            'CSS selector to get content from a specific element. If provided, only content from this element will be returned',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.NETWORK_REQUEST,
+    description: 'Send a network request from the browser with cookies and other browser context',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL to send the request to',
+        },
+        method: {
+          type: 'string',
+          description: 'HTTP method to use (default: GET)',
+        },
+        headers: {
+          type: 'object',
+          description: 'Headers to include in the request',
+        },
+        body: {
+          type: 'string',
+          description: 'Body of the request (for POST, PUT, etc.)',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Timeout in milliseconds (default: 30000)',
+        },
+        formData: {
+          type: 'object',
+          description:
+            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:.',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.NETWORK_CAPTURE,
+    description:
+      'Unified network capture tool. Use action="start" to begin capturing, action="stop" to end and retrieve results. Set needResponseBody=true to capture response bodies (uses Debugger API, may conflict with DevTools). Default mode uses webRequest API (lightweight, no debugger conflict, but no response body).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['start', 'stop'],
+          description: 'Action to perform: "start" begins capture, "stop" ends and returns results',
+        },
+        needResponseBody: {
+          type: 'boolean',
+          description:
+            'When true, captures response body using Debugger API (default: false). Only use when you need to inspect response content.',
+        },
+        url: {
+          type: 'string',
+          description:
+            'For action="start": a concrete http(s) URL opens a fresh tab and captures from the first navigation; a Chrome match pattern (for example https://example.com/*) attaches to an already-open tab. If omitted, uses the current active tab.',
+        },
+        maxCaptureTime: {
+          type: 'number',
+          description: 'Maximum capture time in milliseconds (default: 180000)',
+        },
+        inactivityTimeout: {
+          type: 'number',
+          description: 'Stop after inactivity in milliseconds (default: 60000). Set 0 to disable.',
+        },
+        includeStatic: {
+          type: 'boolean',
+          description:
+            'Include document/static responses such as HTML, images, scripts, and stylesheets (default: false). When false, top-level page documents and static assets are filtered, but XHR/fetch responses are still kept even if they return text/html; navigation-only pages may still produce 0 captured requests.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD,
+    description:
+      'Wait for a browser download, get the latest matching download status, or list recent downloads with normalized status fields and final file paths.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['wait', 'status', 'list'],
+          description:
+            'wait (default), status for latest matching download, or list for recent matches.',
+        },
+        id: { type: 'number', description: 'Filter by download ID.' },
+        filenameContains: {
+          type: 'string',
+          description: 'Filter by substring in filename, full path, URL, or final URL.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'For action="wait": timeout in ms (default 60000, max 300000).',
+        },
+        waitForComplete: {
+          type: 'boolean',
+          description: 'For action="wait": wait until completed/interrupted (default true).',
+        },
+        startedAfter: {
+          type: 'number',
+          description:
+            'Only include downloads whose startTime is on/after this Unix timestamp in ms.',
+        },
+        allowInterrupted: {
+          type: 'boolean',
+          description: 'For action="wait": treat interrupted downloads as a valid terminal result.',
+        },
+        state: {
+          type: 'string',
+          enum: ['in_progress', 'complete', 'interrupted'],
+          description: 'Filter by raw Chrome download state.',
+        },
+        status: {
+          type: 'string',
+          enum: ['pending', 'in_progress', 'completed', 'failed'],
+          description: 'Filter by normalized status.',
+        },
+        limit: {
+          type: 'number',
+          description: 'For action="list": maximum returned items (default 20, max 200).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.HISTORY,
+    description: 'Retrieve and search browsing history from Chrome',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description:
+            'Text to search for in history URLs and titles. Leave empty to retrieve all history entries within the time range.',
+        },
+        startTime: {
+          type: 'string',
+          description:
+            'Start time as a date string. Supports ISO format (e.g., "2023-10-01", "2023-10-01T14:30:00"), relative times (e.g., "1 day ago", "2 weeks ago", "3 months ago", "1 year ago"), and special keywords ("now", "today", "yesterday"). Default: 24 hours ago',
+        },
+        endTime: {
+          type: 'string',
+          description:
+            'End time as a date string. Supports ISO format (e.g., "2023-10-31", "2023-10-31T14:30:00"), relative times (e.g., "1 day ago", "2 weeks ago", "3 months ago", "1 year ago"), and special keywords ("now", "today", "yesterday"). Default: current time',
+        },
+        maxResults: {
+          type: 'number',
+          description:
+            'Maximum number of history entries to return. Use this to limit results for performance or to focus on the most relevant entries. (default: 100)',
+        },
+        excludeCurrentTabs: {
+          type: 'boolean',
+          description:
+            "When set to true, filters out URLs that are currently open in any browser tab. Useful for finding pages you've visited but don't have open anymore. (default: false)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.BOOKMARK_SEARCH,
+    description: 'Search Chrome bookmarks by title and URL',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Search query to match against bookmark titles and URLs. Leave empty to retrieve all bookmarks.',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Maximum number of bookmarks to return (default: 50)',
+        },
+        folderPath: {
+          type: 'string',
+          description:
+            'Optional folder path or ID to limit search to a specific bookmark folder. Can be a path string (e.g., "Work/Projects") or a folder ID.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.BOOKMARK_ADD,
+    description: 'Add a new bookmark to Chrome',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL to bookmark. If not provided, uses the current active tab URL.',
+        },
+        title: {
+          type: 'string',
+          description: 'Title for the bookmark. If not provided, uses the page title from the URL.',
+        },
+        parentId: {
+          type: 'string',
+          description:
+            'Parent folder path or ID to add the bookmark to. Can be a path string (e.g., "Work/Projects") or a folder ID. If not provided, adds to the "Bookmarks Bar" folder.',
+        },
+        createFolder: {
+          type: 'boolean',
+          description: 'Whether to create the parent folder if it does not exist (default: false)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.BOOKMARK_DELETE,
+    description: 'Delete a bookmark from Chrome',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        bookmarkId: {
+          type: 'string',
+          description: 'ID of the bookmark to delete. Either bookmarkId or url must be provided.',
+        },
+        url: {
+          type: 'string',
+          description: 'URL of the bookmark to delete. Used if bookmarkId is not provided.',
+        },
+        title: {
+          type: 'string',
+          description: 'Title of the bookmark to help with matching when deleting by URL.',
+        },
+      },
+      required: [],
+    },
+  },
+  // {
+  //   name: TOOL_NAMES.BROWSER.SEARCH_TABS_CONTENT,
+  //   description:
+  //     'search for related content from the currently open tab and return the corresponding web pages.',
+  //   inputSchema: {
+  //     type: 'object',
+  //     properties: {
+  //       query: {
+  //         type: 'string',
+  //         description: 'the query to search for related content.',
+  //       },
+  //     },
+  //     required: ['query'],
+  //   },
+  // },
+  // {
+  //   name: TOOL_NAMES.BROWSER.INJECT_SCRIPT,
+  //   description:
+  //     'inject the user-specified content script into the webpage. By default, inject into the currently active tab',
+  //   inputSchema: {
+  //     type: 'object',
+  //     properties: {
+  //       url: {
+  //         type: 'string',
+  //         description:
+  //           'If a URL is specified, inject the script into the webpage corresponding to the URL.',
+  //       },
+  //       tabId: {
+  //         type: 'number',
+  //         description:
+  //           'Target an existing tab by ID to inject into. Overrides url/active tab selection when provided.',
+  //       },
+  //       windowId: {
+  //         type: 'number',
+  //         description:
+  //           'Target window ID for selecting active tab or creating new tab when url is provided and tabId is omitted.',
+  //       },
+  //       background: {
+  //         type: 'boolean',
+  //         description:
+  //           'Do not activate tab/focus window during injection when true (default: false).',
+  //       },
+  //       type: {
+  //         type: 'string',
+  //         description:
+  //           'the javaScript world for a script to execute within. must be ISOLATED or MAIN',
+  //       },
+  //       jsScript: {
+  //         type: 'string',
+  //         description: 'the content script to inject',
+  //       },
+  //     },
+  //     required: ['type', 'jsScript'],
+  //   },
+  // },
+  // {
+  //   name: TOOL_NAMES.BROWSER.SEND_COMMAND_TO_INJECT_SCRIPT,
+  //   description:
+  //     'if the script injected using chrome_inject_script listens for user-defined events, this tool can be used to trigger those events',
+  //   inputSchema: {
+  //     type: 'object',
+  //     properties: {
+  //       tabId: {
+  //         type: 'number',
+  //         description:
+  //           'the tab where you previously injected the script(if not provided,  use the currently active tab)',
+  //       },
+  //       eventName: {
+  //         type: 'string',
+  //         description: 'the eventName your injected content script listen for',
+  //       },
+  //       payload: {
+  //         type: 'string',
+  //         description: 'the payload passed to event, must be a json string',
+  //       },
+  //     },
+  //     required: ['eventName'],
+  //   },
+  // },
+  {
+    name: TOOL_NAMES.BROWSER.JAVASCRIPT,
+    description:
+      'Execute JavaScript code in a browser tab and return the result. Uses CDP Runtime.evaluate with awaitPromise and returnByValue; automatically falls back to chrome.scripting.executeScript if the debugger is busy. DOM events created here are synthetic (event.isTrusted=false); if a site ignores them, use chrome_computer or CDP Input events. For cross-origin iframes, prefer Page.getFrameTree + Page.createIsolatedWorld via chrome_cdp_command/chrome_cdp_batch. Output is sanitized (sensitive data redacted) and truncated by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description:
+            'JavaScript code to execute. Runs inside an async function body, so top-level await and "return ..." are supported.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        frameId: {
+          type: 'number',
+          description:
+            'Target frame ID. When provided, execution uses chrome.scripting.executeScript in the frame isolated world.',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Execution timeout in milliseconds (default: 15000).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description:
+            'Maximum output size in bytes after sanitization (default: 51200). Output exceeding this limit will be truncated.',
+        },
+      },
+      required: ['code'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_COMMAND,
+    description:
+      'Send one raw Chrome DevTools Protocol command to a tab through chrome.debugger. Useful for advanced browser automation such as Runtime.evaluate, DOM.getDocument, DOM.querySelector, DOM.getBoxModel, Input.dispatchMouseEvent, Input.insertText, Page.captureScreenshot, Page.getFrameTree, and Page.createIsolatedWorld. For trusted clicks, get center coordinates with DOM.getBoxModel and dispatch mouseMoved -> mousePressed -> mouseReleased. Use bringToFront for throttled background tabs, and recapture coordinates after first debugger attach or Chrome infobar changes. Prefer higher-level tools when they fit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        method: {
+          type: 'string',
+          description: 'CDP method name, for example "Runtime.evaluate" or "Page.getFrameTree".',
+        },
+        params: {
+          type: 'object',
+          description: 'CDP command parameters object.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        bringToFront: {
+          type: 'boolean',
+          description: 'Send Page.bringToFront before the command (default false).',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Command timeout in milliseconds (default 15000, max 120000).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'Maximum serialized result size in bytes (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact cookies/tokens/password-like data from the CDP result (default true). Set false only when you need raw CDP output such as screenshot base64.',
+        },
+      },
+      required: ['method'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_BATCH,
+    description:
+      'Send multiple Chrome DevTools Protocol commands to a tab using one shared debugger session. Use this to reduce MCP round trips for flows like DOM.getDocument -> DOM.querySelector -> DOM.getBoxModel -> Input.dispatchMouseEvent. Good for trusted click sequences: mouseMoved -> mousePressed -> mouseReleased. Use bringToFront before actions on throttled background tabs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        commands: {
+          type: 'array',
+          description:
+            'Commands to run in order. Each item supports method, params, label, and continueOnError.',
+          items: {
+            type: 'object',
+            properties: {
+              method: {
+                type: 'string',
+                description: 'CDP method name.',
+              },
+              params: {
+                type: 'object',
+                description: 'CDP command parameters object.',
+              },
+              label: {
+                type: 'string',
+                description: 'Optional label copied into the result for easier matching.',
+              },
+              continueOnError: {
+                type: 'boolean',
+                description:
+                  'Continue with following commands if this command fails (default false).',
+              },
+            },
+            required: ['method'],
+          },
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        bringToFront: {
+          type: 'boolean',
+          description: 'Send Page.bringToFront before the batch (default false).',
+        },
+        timeoutMs: {
+          type: 'number',
+          description: 'Timeout for each command in milliseconds (default 15000, max 120000).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'Maximum serialized result size per command in bytes (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact cookies/tokens/password-like data from command results (default true). Set false only when raw CDP output is required.',
+        },
+      },
+      required: ['commands'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CLICK,
+    description:
+      'Click on an element in a web page. Supports multiple targeting methods: CSS selector, XPath, element ref (from chrome_read_page), or viewport coordinates. More focused than chrome_computer for simple click operations. This uses page-side DOM interaction; if the target requires trusted user input or precise coordinates, switch to chrome_computer or CDP Input.dispatchMouseEvent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description: 'CSS selector or XPath for the element to click.',
+        },
+        selectorType: {
+          type: 'string',
+          enum: ['css', 'xpath'],
+          description: 'Type of selector (default: "css").',
+        },
+        ref: {
+          type: 'string',
+          description: 'Element ref from chrome_read_page (takes precedence over selector).',
+        },
+        coordinates: {
+          type: 'object',
+          description: 'Viewport coordinates to click at.',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+          },
+          required: ['x', 'y'],
+        },
+        double: {
+          type: 'boolean',
+          description: 'Perform double click when true (default: false).',
+        },
+        button: {
+          type: 'string',
+          enum: ['left', 'right', 'middle'],
+          description: 'Mouse button to click (default: "left").',
+        },
+        modifiers: {
+          type: 'object',
+          description: 'Modifier keys to hold during click.',
+          properties: {
+            altKey: { type: 'boolean' },
+            ctrlKey: { type: 'boolean' },
+            metaKey: { type: 'boolean' },
+            shiftKey: { type: 'boolean' },
+          },
+        },
+        waitForNavigation: {
+          type: 'boolean',
+          description: 'Wait for navigation to complete after click (default: false).',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Timeout in milliseconds for waiting (default: 5000).',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Window ID to select active tab from (when tabId is omitted).',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Target frame ID for iframe support.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.FILL,
+    description:
+      'Fill or select a form element on a web page. Supports input, textarea, select, checkbox, and radio elements. Use CSS selector, XPath, or element ref to target the element. For autofill/password-protected fields that only accept input after foreground focus, click/focus first and use chrome_keyboard or CDP Input.insertText if synthetic fill is ignored.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description: 'CSS selector or XPath for the form element.',
+        },
+        selectorType: {
+          type: 'string',
+          enum: ['css', 'xpath'],
+          description: 'Type of selector (default: "css").',
+        },
+        ref: {
+          type: 'string',
+          description: 'Element ref from chrome_read_page (takes precedence over selector).',
+        },
+        value: {
+          type: ['string', 'number', 'boolean'],
+          description:
+            'Value to fill. For text inputs: string. For checkboxes/radios: boolean. For selects: option value or text.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Window ID to select active tab from (when tabId is omitted).',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Target frame ID for iframe support.',
+        },
+      },
+      required: ['value'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.KEYBOARD,
+    description:
+      'Simulate keyboard input on a web page. Supports single keys (Enter, Tab, Escape), key combinations (Ctrl+C, Ctrl+V), and text input. Can target a specific element or send to the focused element.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keys: {
+          type: 'string',
+          description:
+            'Keys or key combinations to simulate. Examples: "Enter", "Tab", "Ctrl+C", "Shift+Tab", "Hello World".',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector or XPath for target element to receive keyboard events.',
+        },
+        selectorType: {
+          type: 'string',
+          enum: ['css', 'xpath'],
+          description: 'Type of selector (default: "css").',
+        },
+        delay: {
+          type: 'number',
+          description: 'Delay between keystrokes in milliseconds (default: 50).',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Window ID to select active tab from (when tabId is omitted).',
+        },
+        frameId: {
+          type: 'number',
+          description: 'Target frame ID for iframe support.',
+        },
+      },
+      required: ['keys'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CONSOLE,
+    description:
+      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~2s wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description:
+            'URL to navigate to and capture console from. If not provided, uses the current active tab',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        background: {
+          type: 'boolean',
+          description: 'Do not activate tab/focus window when capturing via CDP. Default: false',
+        },
+        includeExceptions: {
+          type: 'boolean',
+          description: 'Include uncaught exceptions in the output (default: true)',
+        },
+        maxMessages: {
+          type: 'number',
+          description:
+            'Maximum number of console messages to capture in snapshot mode (default: 100). If limit is provided, it takes precedence.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['snapshot', 'buffer'],
+          description:
+            'Console capture mode: snapshot (default; waits ~2s for messages) or buffer (persistent per-tab buffer; reads from memory instantly).',
+        },
+        buffer: {
+          type: 'boolean',
+          description: 'Alias for mode="buffer" (default: false).',
+        },
+        clear: {
+          type: 'boolean',
+          description:
+            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style).',
+        },
+        clearAfterRead: {
+          type: 'boolean',
+          description:
+            'Buffer mode only: clear the buffered logs for this tab AFTER reading, to avoid duplicate messages on subsequent calls (default: false). This matches mcp-tools.js behavior.',
+        },
+        pattern: {
+          type: 'string',
+          description:
+            'Optional regex filter applied to message/exception text. Supports /pattern/flags syntax.',
+        },
+        onlyErrors: {
+          type: 'boolean',
+          description:
+            'Only return error-level console messages (and exceptions when includeExceptions=true). Default: false.',
+        },
+        limit: {
+          type: 'number',
+          description:
+            'Limit returned console messages. In snapshot mode this is an alias for maxMessages; in buffer mode it limits returned messages from the buffer.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.COLLECT_DEBUG_EVIDENCE,
+    description:
+      'Collect a compact debugging bundle for a tab: page context, optional screenshot, recent console logs, runtime exceptions, and a recent network-capture summary when available.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID (default: active tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        includeScreenshot: {
+          type: 'boolean',
+          description: 'Include a compressed screenshot as base64 data (default: true).',
+        },
+        background: {
+          type: 'boolean',
+          description:
+            'Prefer background-friendly screenshot capture when possible (default: true).',
+        },
+        fullPage: {
+          type: 'boolean',
+          description: 'Capture a full-page screenshot instead of the current viewport.',
+        },
+        includeConsole: {
+          type: 'boolean',
+          description: 'Include console and runtime exception evidence (default: true).',
+        },
+        consoleMode: {
+          type: 'string',
+          enum: ['auto', 'buffer', 'snapshot'],
+          description:
+            'Console collection mode. auto prefers buffer and falls back to snapshot when needed (default: auto).',
+        },
+        includeExceptions: {
+          type: 'boolean',
+          description: 'Include uncaught runtime exceptions in console evidence (default: true).',
+        },
+        onlyErrors: {
+          type: 'boolean',
+          description: 'Only include error-level console messages (default: false).',
+        },
+        consoleLimit: {
+          type: 'number',
+          description: 'Maximum number of console messages to return (default: 20, max: 200).',
+        },
+        includeExtensionConsole: {
+          type: 'boolean',
+          description:
+            'Include chrome-extension:// / moz-extension:// console entries. Defaults to false so page-origin evidence is shown first.',
+        },
+        clearConsole: {
+          type: 'boolean',
+          description: 'Buffer mode only: clear buffered console entries before reading.',
+        },
+        clearConsoleAfterRead: {
+          type: 'boolean',
+          description: 'Buffer mode only: clear buffered console entries after reading.',
+        },
+        includeNetworkSummary: {
+          type: 'boolean',
+          description:
+            'Include a recent network-capture summary for this tab when available (default: true).',
+        },
+        networkLimit: {
+          type: 'number',
+          description: 'Maximum number of recent requests to include in the network summary.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.FILE_UPLOAD,
+    description:
+      'Upload files to web forms using Chrome DevTools Protocol. Default mode targets input[type="file"] with DOM.setFileInputFiles, checks disabled/multiple/accept state where possible, dispatches input/change/blur events, checks browser-side selection state, and returns an uploadId. Set mode="dragDrop" to dispatch dragenter/dragover/drop with DataTransfer files to a drop zone selector.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'Target tab ID (default: active tab)' },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted',
+        },
+        selector: {
+          type: 'string',
+          description:
+            'CSS selector for the file input element, or for the drop zone when mode="dragDrop".',
+        },
+        mode: {
+          type: 'string',
+          enum: ['fileInput', 'dragDrop'],
+          description:
+            'Upload mode. fileInput uses DOM.setFileInputFiles on selector (default). dragDrop creates a temporary file input, attaches files with CDP, then dispatches drag/drop events to selector.',
+        },
+        triggerSelector: {
+          type: 'string',
+          description:
+            'Optional selector for a button/control to click before looking for the file input. Useful when the page creates input[type="file"] only after clicking an upload button. Only used in fileInput mode.',
+        },
+        waitForInputMs: {
+          type: 'number',
+          description:
+            'How long to wait for selector to become a file input after triggerSelector is clicked (default 3000, max 10000).',
+        },
+        filePath: {
+          type: 'string',
+          description: 'Local file path to upload',
+        },
+        fileUrl: {
+          type: 'string',
+          description: 'URL to download file from before uploading',
+        },
+        base64Data: {
+          type: 'string',
+          description: 'Base64 encoded file data to upload',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Optional filename when using base64 or URL (default: "uploaded-file")',
+        },
+        multiple: {
+          type: 'boolean',
+          description:
+            'Whether the input accepts multiple files (default: false). The tool will fail clearly when multiple files are requested but the target input does not allow them.',
+        },
+      },
+      required: ['selector'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.GET_UPLOAD_STATUS,
+    description:
+      'Get the latest browser-side status for a file upload attempt. Can look up by uploadId or inspect the current file input selection by selector.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uploadId: {
+          type: 'string',
+          description: 'Upload session id returned by chrome_upload_file.',
+        },
+        selector: {
+          type: 'string',
+          description:
+            'File input selector to inspect when uploadId is omitted or for a live re-check.',
+        },
+        tabId: {
+          type: 'number',
+          description:
+            'Target tab ID for live inspection (default: active tab or the session tab).',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.HANDLE_DIALOG,
+    description: 'Handle JavaScript dialogs (alert/confirm/prompt) via CDP',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'accept | dismiss' },
+        promptText: {
+          type: 'string',
+          description: 'Optional prompt text when accepting a prompt',
+        },
+      },
+      required: ['action'],
+    },
+  },
+];
+
+const SUCCESS_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+  },
+  required: ['success'],
+  additionalProperties: true,
+} satisfies NonNullable<Tool['outputSchema']>;
+
+const HEALTH_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    tool: { type: 'string' },
+    checkedAt: { type: 'number' },
+    extension: { type: 'object' },
+    schema: { type: 'object' },
+    browser: { type: 'object' },
+    nativeHost: { type: 'object' },
+  },
+  required: ['success', 'tool', 'checkedAt', 'extension', 'schema', 'browser', 'nativeHost'],
+  additionalProperties: true,
+} satisfies NonNullable<Tool['outputSchema']>;
+
+const BROWSER_INVENTORY_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    windowCount: { type: 'number' },
+    tabCount: { type: 'number' },
+    windows: { type: 'array' },
+  },
+  required: ['windowCount', 'tabCount', 'windows'],
+  additionalProperties: true,
+} satisfies NonNullable<Tool['outputSchema']>;
+
+const HISTORY_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: { type: 'array' },
+    totalCount: { type: 'number' },
+    timeRange: { type: 'object' },
+    query: { type: 'string' },
+  },
+  required: ['items', 'totalCount', 'timeRange'],
+  additionalProperties: true,
+} satisfies NonNullable<Tool['outputSchema']>;
+
+const SUCCESS_OUTPUT_TOOLS = new Set<string>([
+  TOOL_NAMES.BROWSER.LIST_FRAMES,
+  TOOL_NAMES.BROWSER.SCAN_COMPACT,
+  TOOL_NAMES.BROWSER.TAB_GROUP,
+  TOOL_NAMES.BROWSER.NETWORK_REQUEST,
+  TOOL_NAMES.BROWSER.JAVASCRIPT,
+  TOOL_NAMES.BROWSER.CDP_COMMAND,
+  TOOL_NAMES.BROWSER.CDP_BATCH,
+  TOOL_NAMES.BROWSER.CONSOLE,
+  TOOL_NAMES.BROWSER.COLLECT_DEBUG_EVIDENCE,
+  TOOL_NAMES.BROWSER.QUERY_ELEMENTS,
+  TOOL_NAMES.BROWSER.GET_ELEMENT_HTML,
+  TOOL_NAMES.BROWSER.CLIPBOARD,
+  TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
+  TOOL_NAMES.BROWSER.WAIT_FOR,
+  TOOL_NAMES.BROWSER.ASSERT,
+]);
+
+type JsonSchemaObject = Record<string, unknown>;
+
+const READ_ONLY_TOOLS = new Set<string>([
+  TOOL_NAMES.BROWSER.HEALTH,
+  TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS,
+  TOOL_NAMES.BROWSER.LIST_FRAMES,
+  TOOL_NAMES.BROWSER.PERFORMANCE_ANALYZE_INSIGHT,
+  TOOL_NAMES.BROWSER.SCAN_COMPACT,
+  TOOL_NAMES.BROWSER.READ_PAGE,
+  TOOL_NAMES.BROWSER.QUERY_ELEMENTS,
+  TOOL_NAMES.BROWSER.GET_ELEMENT_HTML,
+  TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
+  TOOL_NAMES.BROWSER.WAIT_FOR,
+  TOOL_NAMES.BROWSER.ASSERT,
+  TOOL_NAMES.BROWSER.WEB_FETCHER,
+  TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD,
+  TOOL_NAMES.BROWSER.HISTORY,
+  TOOL_NAMES.BROWSER.BOOKMARK_SEARCH,
+  TOOL_NAMES.BROWSER.GET_UPLOAD_STATUS,
+]);
+
+const NON_DESTRUCTIVE_MUTATING_TOOLS = new Set<string>([
+  TOOL_NAMES.BROWSER.SCREENSHOT,
+  TOOL_NAMES.BROWSER.SWITCH_TAB,
+  TOOL_NAMES.BROWSER.BOOKMARK_ADD,
+]);
+
+const IDEMPOTENT_MUTATING_TOOLS = new Set<string>([
+  TOOL_NAMES.BROWSER.CLOSE_TABS,
+  TOOL_NAMES.BROWSER.SWITCH_TAB,
+  TOOL_NAMES.BROWSER.BOOKMARK_DELETE,
+]);
+
+const CLOSED_WORLD_TOOLS = new Set<string>([
+  TOOL_NAMES.BROWSER.HEALTH,
+  TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS,
+  TOOL_NAMES.BROWSER.LIST_FRAMES,
+  TOOL_NAMES.BROWSER.PERFORMANCE_ANALYZE_INSIGHT,
+  TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
+  TOOL_NAMES.BROWSER.CLOSE_TABS,
+  TOOL_NAMES.BROWSER.SWITCH_TAB,
+  TOOL_NAMES.BROWSER.TAB_GROUP,
+  TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD,
+  TOOL_NAMES.BROWSER.HISTORY,
+  TOOL_NAMES.BROWSER.BOOKMARK_SEARCH,
+  TOOL_NAMES.BROWSER.BOOKMARK_ADD,
+  TOOL_NAMES.BROWSER.BOOKMARK_DELETE,
+  TOOL_NAMES.BROWSER.GET_UPLOAD_STATUS,
+]);
+
+function closeDeclaredObjectSchemas(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(closeDeclaredObjectSchemas);
+  }
+
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+
+  const schema = Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, closeDeclaredObjectSchemas(child)]),
+  ) as JsonSchemaObject;
+
+  // Objects with declared properties are records with a fixed shape. Objects without
+  // properties (for example HTTP headers and CDP params) intentionally remain free maps.
+  if (
+    schema.type === 'object' &&
+    Object.prototype.hasOwnProperty.call(schema, 'properties') &&
+    !Object.prototype.hasOwnProperty.call(schema, 'additionalProperties')
+  ) {
+    schema.additionalProperties = false;
+  }
+
+  return schema;
+}
+
+function getToolAnnotations(name: string): ToolAnnotations {
+  const readOnly = READ_ONLY_TOOLS.has(name);
+
+  return {
+    readOnlyHint: readOnly,
+    destructiveHint: readOnly ? false : !NON_DESTRUCTIVE_MUTATING_TOOLS.has(name),
+    idempotentHint: readOnly || IDEMPOTENT_MUTATING_TOOLS.has(name),
+    openWorldHint: !CLOSED_WORLD_TOOLS.has(name),
+  };
+}
+
+function getToolOutputSchema(name: string): Tool['outputSchema'] | undefined {
+  if (name === TOOL_NAMES.BROWSER.HEALTH) return HEALTH_OUTPUT_SCHEMA;
+  if (name === TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS) {
+    return BROWSER_INVENTORY_OUTPUT_SCHEMA;
+  }
+  if (name === TOOL_NAMES.BROWSER.HISTORY) return HISTORY_OUTPUT_SCHEMA;
+  if (SUCCESS_OUTPUT_TOOLS.has(name)) return SUCCESS_OUTPUT_SCHEMA;
+  return undefined;
+}
+
+export const TOOL_SCHEMAS: Tool[] = RAW_TOOL_SCHEMAS.map((tool) => {
+  const outputSchema = getToolOutputSchema(tool.name);
+  return {
+    ...tool,
+    inputSchema: closeDeclaredObjectSchemas(tool.inputSchema) as Tool['inputSchema'],
+    annotations: getToolAnnotations(tool.name),
+    ...(outputSchema ? { outputSchema } : {}),
+  };
+});

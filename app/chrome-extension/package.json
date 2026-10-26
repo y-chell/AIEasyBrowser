@@ -1,0 +1,46 @@
+{
+  "name": "aieasybrowser-extension",
+  "description": "AIEasyBrowser control extension",
+  "author": "AIEasyBrowser",
+  "private": true,
+  "version": "1.0.20",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aieasybrowser/aieasybrowser.git",
+    "directory": "app/chrome-extension"
+  },
+  "homepage": "https://github.com/aieasybrowser/aieasybrowser",
+  "bugs": {
+    "url": "https://github.com/aieasybrowser/aieasybrowser/issues"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare",
+    "lint": "npx eslint .",
+    "lint:fix": "npx eslint . --fix",
+    "format": "npx prettier --write .",
+    "format:check": "npx prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "aieasybrowser-shared": "workspace:*",
+    "date-fns": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.318",
+    "dotenv": "^16.5.0",
+    "vite-plugin-static-copy": "^3.0.0",
+    "vitest": "^4.1.12",
+    "wxt": "^0.20.0",
+    "typescript": "^5.8.3"
+  }
+}

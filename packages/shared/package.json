@@ -1,0 +1,43 @@
+{
+  "name": "aieasybrowser-shared",
+  "version": "1.0.20",
+  "author": "AIEasyBrowser",
+  "main": "dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aieasybrowser/aieasybrowser.git",
+    "directory": "packages/shared"
+  },
+  "homepage": "https://github.com/aieasybrowser/aieasybrowser",
+  "bugs": {
+    "url": "https://github.com/aieasybrowser/aieasybrowser/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "lint": "npx eslint 'src/**/*.{js,ts}'",
+    "lint:fix": "npx eslint 'src/**/*.{js,ts}' --fix",
+    "format": "prettier --write 'src/**/*.{js,ts,json}'"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@typescript-eslint/parser": "^8.32.0",
+    "tsup": "^8.4.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  }
+}
