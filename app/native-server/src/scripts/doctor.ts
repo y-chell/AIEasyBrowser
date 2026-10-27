@@ -26,6 +26,7 @@ import {
 } from './utils';
 import { getBridgeBaseUrl, getBridgeHost, getBridgePort, NATIVE_SERVER_PORT } from '../constant';
 import { parseHttpSecurityConfig } from '../server/http-security';
+import { probeLogWritable } from '../util/diag-log';
 
 const SCHEMA_VERSION = 1;
 const MIN_NODE_MAJOR_VERSION = 20;
@@ -1008,16 +1009,36 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       nextSteps.push('Enable or reload AIEasyBrowser in chrome://extensions, then re-run doctor');
   }
 
-  // Check 8: Logs directory
+  // Check 8: Logs directory and record writability
+  const logProbe = probeLogWritable();
+  let logLastWrite: string | undefined;
+  let logSize: number | undefined;
+  try {
+    const stat = fs.statSync(logProbe.path);
+    logSize = stat.size;
+    logLastWrite = stat.mtime.toISOString();
+  } catch {
+    // No record yet; probeLogWritable already created the directory when it could.
+  }
   checks.push({
     id: 'logs',
     title: 'Logs',
-    status: fs.existsSync(logDir) ? 'ok' : 'warn',
-    message: logDir,
+    status: logProbe.ok ? 'ok' : 'error',
+    message: logProbe.ok
+      ? `${logProbe.path}${logSize === undefined ? ' (no records yet)' : ` (${logSize} bytes)`}`
+      : `Cannot write to ${logProbe.path}: ${logProbe.error}`,
     details: {
-      hint: 'Wrapper logs are created when Chrome launches the native host.',
+      path: logProbe.path,
+      writable: logProbe.ok,
+      sizeBytes: logSize,
+      lastWrite: logLastWrite,
+      error: logProbe.error,
+      hint: 'Records are written when Chrome launches the native host; start a browser command to produce one.',
     },
   });
+  if (!logProbe.ok) {
+    nextSteps.push(`Make the log directory writable: ${path.dirname(logProbe.path)}`);
+  }
 
   // Compute summary
   const summary = computeSummary(checks);

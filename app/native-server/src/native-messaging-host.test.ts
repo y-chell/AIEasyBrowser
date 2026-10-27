@@ -1,6 +1,18 @@
-import { afterEach, describe, expect, jest, test } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { NativeMessageType } from 'aieasybrowser-shared';
 import { NativeMessagingHost } from './native-messaging-host';
+import { setLogDirForTests } from './util/diag-log';
+
+let logDir: string;
+
+beforeEach(() => {
+  // These tests exercise real request lifecycles, so keep their records out of the user log.
+  logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aieasybrowser-host-log-'));
+  setLogDirForTests(logDir);
+});
 
 function createHost() {
   const host = new NativeMessagingHost();
@@ -8,13 +20,27 @@ function createHost() {
   return { host, sendMessage };
 }
 
+function readLogEvents(): string[] {
+  const target = path.join(logDir, 'native-server.log');
+  if (!fs.existsSync(target)) return [];
+  return fs
+    .readFileSync(target, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).event as string);
+}
+
 function getRequestId(sendMessage: jest.SpiedFunction<NativeMessagingHost['sendMessage']>) {
   return (sendMessage.mock.calls[0][0] as any).requestId as string;
 }
 
 afterEach(() => {
+  setLogDirForTests(undefined);
   jest.useRealTimers();
   jest.restoreAllMocks();
+  expect(path.dirname(path.resolve(logDir))).toBe(path.resolve(os.tmpdir()));
+  expect(path.basename(logDir)).toMatch(/^aieasybrowser-host-log-/);
+  fs.rmSync(logDir, { recursive: true, force: true });
 });
 
 describe('NativeMessagingHost request lifecycle', () => {
@@ -59,6 +85,62 @@ describe('NativeMessagingHost request lifecycle', () => {
       payload: { status: 'success' },
     });
     expect((host as any).pendingRequests.size).toBe(0);
+
+    const events = readLogEvents();
+    expect(events).toContain('extension.cancelled');
+    expect(events).toContain('extension.late_response');
+  });
+
+  test('records a timeout with the tool name and correlation id', async () => {
+    jest.useFakeTimers();
+    const { host, sendMessage } = createHost();
+    const request = host.sendRequestToExtensionAndWait(
+      { name: 'chrome_health' },
+      NativeMessageType.CALL_TOOL,
+      50,
+    );
+    const requestId = getRequestId(sendMessage);
+
+    jest.advanceTimersByTime(51);
+
+    await expect(request).rejects.toThrow('Request timed out after 50ms');
+    const records = fs
+      .readFileSync(path.join(logDir, 'native-server.log'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const timeout = records.find((record) => record.event === 'extension.timeout');
+    expect(timeout).toMatchObject({
+      level: 'warn',
+      tool: 'chrome_health',
+      nativeRequestId: requestId,
+      code: 'TIMEOUT',
+    });
+    expect(typeof timeout.durationMs).toBe('number');
+    expect(timeout.extra).toEqual({ timeoutMs: 50 });
+  });
+
+  test('records a successful response with its duration', async () => {
+    const { host, sendMessage } = createHost();
+    const request = host.sendRequestToExtensionAndWait(
+      { name: 'get_windows_and_tabs' },
+      NativeMessageType.CALL_TOOL,
+      1000,
+    );
+    const requestId = getRequestId(sendMessage);
+    await (host as any).handleMessage({
+      responseToRequestId: requestId,
+      payload: { status: 'success', data: { windows: [] } },
+    });
+    await expect(request).resolves.toEqual({ status: 'success', data: { windows: [] } });
+
+    const records = fs
+      .readFileSync(path.join(logDir, 'native-server.log'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const ok = records.find((record) => record.event === 'extension.ok');
+    expect(ok).toMatchObject({ tool: 'get_windows_and_tabs', nativeRequestId: requestId });
   });
 
   test('dispatches progress without settling the request and cleans up on response', async () => {

@@ -13,6 +13,10 @@ jest.mock('./utils', () => ({
   getLogDir: () => '/fixture/aieasybrowser/logs',
   colorText: (text: string) => text,
 }));
+// Doctor reports on the log target without touching the real file system.
+jest.mock('../util/diag-log', () => ({
+  probeLogWritable: () => ({ ok: true, path: '/fixture/aieasybrowser/logs/native-server.log' }),
+}));
 
 const ORIGINAL_ENV = { ...process.env };
 const distDir = path.resolve(__dirname, '..', '..', 'dist');
@@ -158,4 +162,41 @@ describe('CLI-only bridge diagnostics', () => {
       });
     },
   );
+});
+
+describe('log check', () => {
+  test('reports the probed log target rather than only the directory', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: 'ok', message: 'pong' }), { status: 200 }),
+    );
+    const report = await collectDoctorReport({ browser: 'chrome' });
+    const logs = report.checks.find((check) => check.id === 'logs');
+    expect(logs?.status).toBe('ok');
+    expect(String(logs?.message)).toContain('/fixture/aieasybrowser/logs/native-server.log');
+    expect(logs?.details).toMatchObject({
+      path: '/fixture/aieasybrowser/logs/native-server.log',
+      writable: true,
+    });
+  });
+
+  test('surfaces an unwritable log target as an error with a next step', async () => {
+    const diag = jest.requireMock('../util/diag-log') as {
+      probeLogWritable: () => { ok: boolean; path: string; error?: string };
+    };
+    const original = diag.probeLogWritable;
+    diag.probeLogWritable = () => ({
+      ok: false,
+      path: '/fixture/aieasybrowser/logs/native-server.log',
+      error: 'EACCES: permission denied',
+    });
+    try {
+      const report = await collectDoctorReport({ browser: 'chrome' });
+      const logs = report.checks.find((check) => check.id === 'logs');
+      expect(logs?.status).toBe('error');
+      expect(String(logs?.message)).toContain('EACCES: permission denied');
+      expect(report.nextSteps.join(' ')).toContain('/fixture/aieasybrowser/logs');
+    } finally {
+      diag.probeLogWritable = original;
+    }
+  });
 });

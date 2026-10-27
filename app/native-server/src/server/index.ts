@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
+import { randomUUID } from 'node:crypto';
 import {
   NATIVE_SERVER_PORT,
   TIMEOUTS,
@@ -19,6 +20,7 @@ import {
 } from './http-security';
 import { BrowserCommandService } from '../browser/command-service';
 import { BrowserCommandError, browserFailure } from '../browser/protocol';
+import { logger, startTimer } from '../util/diag-log';
 
 export class Server {
   private fastify: FastifyInstance;
@@ -109,6 +111,15 @@ export class Server {
         rawTimeout <= 120_000
           ? rawTimeout
           : 60_000;
+      const elapsed = startTimer();
+      const body = request.body as Record<string, unknown> | undefined;
+      const session = typeof body?.session === 'string' ? body.session : 'default';
+      const command = typeof body?.command === 'string' ? body.command : 'unknown';
+      // One id spans the HTTP request, the command, and every tool call it dispatches.
+      const requestId = typeof body?.requestId === 'string' ? body.requestId : randomUUID();
+      // The command schema is strict, so the correlation id travels beside the payload.
+      const commandInput = body && typeof body === 'object' ? { ...body } : body;
+      if (commandInput && typeof commandInput === 'object') delete commandInput.requestId;
       const timer = setTimeout(
         () =>
           controller.abort(
@@ -123,8 +134,19 @@ export class Server {
       };
       reply.raw.once('close', disconnected);
       request.raw.once('aborted', disconnected);
+      logger.info({
+        event: 'command.start',
+        requestId,
+        session,
+        tool: command,
+        extra: { timeoutMs },
+      });
       try {
-        const response = await this.browserCommands.execute(request.body, controller.signal);
+        const response = await this.browserCommands.execute(
+          commandInput,
+          controller.signal,
+          requestId,
+        );
         const status = response.ok
           ? 200
           : response.error?.code === 'INVALID_ARGUMENT'
@@ -136,7 +158,30 @@ export class Server {
                 : response.error?.code === 'TIMEOUT'
                   ? 504
                   : 422;
+        logger[response.ok ? 'info' : 'warn']({
+          event: response.ok ? 'command.ok' : 'command.failed',
+          requestId,
+          session,
+          tool: command,
+          durationMs: elapsed(),
+          phase: response.phase,
+          actionStatus: response.actionStatus,
+          completed: response.completed,
+          code: response.error?.code,
+          error: response.error?.message,
+          extra: { status },
+        });
         if (!reply.raw.destroyed) return reply.code(status).send(response);
+      } catch (error) {
+        logger.error({
+          event: 'command.error',
+          requestId,
+          session,
+          tool: command,
+          durationMs: elapsed(),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       } finally {
         clearTimeout(timer);
         reply.raw.removeListener('close', disconnected);
@@ -152,8 +197,18 @@ export class Server {
       const address = await this.fastify.listen({ port, host: this.securityConfig.listenHost });
       process.env[BRIDGE_ENV.PORT] = new URL(address).port;
       this.isRunning = true;
+      logger.info({
+        event: 'bridge.started',
+        port: Number(new URL(address).port),
+        extra: { host: this.securityConfig.listenHost },
+      });
     } catch (error) {
       this.isRunning = false;
+      logger.error({
+        event: 'bridge.start_failed',
+        port,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
@@ -163,8 +218,13 @@ export class Server {
     try {
       await this.fastify.close();
       this.isRunning = false;
+      logger.info({ event: 'bridge.stopped' });
     } catch (error) {
       this.isRunning = false;
+      logger.error({
+        event: 'bridge.stop_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }

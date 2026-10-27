@@ -1,7 +1,35 @@
-import { beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { BrowserCommandService } from './command-service';
 import { BrowserCommandError } from './protocol';
+import { setLogDirForTests } from '../util/diag-log';
+
+let logDir: string;
+
+beforeEach(() => {
+  logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aieasybrowser-command-log-'));
+  setLogDirForTests(logDir);
+});
+
+afterEach(() => {
+  setLogDirForTests(undefined);
+  expect(path.dirname(path.resolve(logDir))).toBe(path.resolve(os.tmpdir()));
+  expect(path.basename(logDir)).toMatch(/^aieasybrowser-command-log-/);
+  fs.rmSync(logDir, { recursive: true, force: true });
+});
+
+function readLogRecords(): Array<Record<string, any>> {
+  const target = path.join(logDir, 'native-server.log');
+  if (!fs.existsSync(target)) return [];
+  return fs
+    .readFileSync(target, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -478,5 +506,61 @@ describe('named CLI browser workflows', () => {
       actionStatus: 'not_started',
     });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  test('records command and tool lifecycle with matching correlation ids', async () => {
+    await selectedScan();
+    const records = readLogRecords();
+    const events = records.map((record) => record.event);
+
+    expect(events).toContain('command.done');
+    expect(events).toContain('tool.start');
+    expect(events).toContain('tool.ok');
+
+    // One CLI command fans out to several tool calls; all of them must name the tool
+    // that actually ran so a failure can be tied to a phase.
+    const scans = records.filter(
+      (record) => record.event === 'command.done' && record.tool === 'scan',
+    );
+    expect(scans.length).toBeGreaterThan(0);
+    for (const done of scans) {
+      expect(typeof done.session).toBe('string');
+      expect(typeof done.durationMs).toBe('number');
+    }
+
+    const toolStarts = records.filter((record) => record.event === 'tool.start');
+    expect(toolStarts.length).toBeGreaterThan(0);
+    for (const start of toolStarts) {
+      expect(typeof start.tool).toBe('string');
+      expect(typeof start.nativeRequestId).toBe('string');
+    }
+  });
+
+  test('records an argument rejection without dispatching to the extension', async () => {
+    const response = await run({ command: 'scan', limit: 999 });
+    expect(response).toMatchObject({ error: { code: 'INVALID_ARGUMENT' } });
+    expect(send).not.toHaveBeenCalled();
+
+    const rejected = readLogRecords().find((record) => record.event === 'command.rejected');
+    expect(rejected).toMatchObject({ code: 'INVALID_ARGUMENT', tool: 'scan' });
+    expect(String(rejected?.error)).toContain('limit');
+  });
+
+  test('records a failing phase without logging page content', async () => {
+    const ref = await selectedScan();
+    send.mockImplementationOnce(async () => failure('TARGET_CLOSED: tab went away'));
+    const response = await run({ command: 'act', actions: [{ op: 'click', ref }], scan: false });
+    expect(response).toMatchObject({ ok: false, phase: 'action', actionStatus: 'not_started' });
+
+    const records = readLogRecords();
+    const failed = records.find(
+      (record) => record.event === 'tool.failed' && record.code === 'TARGET_CLOSED',
+    );
+    expect(failed).toBeDefined();
+    expect(failed?.tool).toBe('chrome_click_element');
+    const commandFailed = records.filter((record) => record.event === 'command.failed').at(-1);
+    expect(commandFailed).toMatchObject({ phase: 'action', actionStatus: 'not_started' });
+    // Records carry identifiers and outcome only; the page text never enters the log.
+    expect(JSON.stringify(records)).not.toContain('Fixture');
   });
 });

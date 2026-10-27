@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { NativeMessageType, type NativeToolProgress } from 'aieasybrowser-shared';
 import { NATIVE_SERVER_PORT, TIMEOUTS } from './constant';
 import fileHandler from './file-handler';
+import { logger, startTimer } from './util/diag-log';
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -12,6 +13,9 @@ interface PendingRequest {
   signal?: AbortSignal;
   abortListener?: () => void;
   onProgress?: (progress: NativeToolProgress) => void | Promise<void>;
+  /** Diagnostics only: what this request is for, and when it started. */
+  toolName?: string;
+  startedAt?: () => number;
 }
 
 export type { NativeToolProgress } from 'aieasybrowser-shared';
@@ -19,6 +23,11 @@ export type { NativeToolProgress } from 'aieasybrowser-shared';
 export interface ExtensionRequestOptions {
   signal?: AbortSignal;
   onProgress?: (progress: NativeToolProgress) => void | Promise<void>;
+  /**
+   * Reuse a caller-generated correlation id instead of minting one here, so the
+   * dispatch site and this transport log the same value for one round trip.
+   */
+  requestId?: string;
 }
 
 function createAbortError(message = 'Request cancelled'): Error {
@@ -132,12 +141,31 @@ export class NativeMessagingHost {
 
       if (pending) {
         if (message.error) {
+          logger.error({
+            event: 'extension.error',
+            tool: pending.toolName,
+            nativeRequestId: requestId,
+            durationMs: pending.startedAt?.(),
+            code: 'EXTENSION_ERROR',
+            error: String(message.error),
+          });
           pending.reject(new Error(message.error));
         } else {
+          logger.info({
+            event: 'extension.ok',
+            tool: pending.toolName,
+            nativeRequestId: requestId,
+            durationMs: pending.startedAt?.(),
+          });
           pending.resolve(message.payload);
         }
       } else {
-        // just ignore
+        // A late response for a timed-out or cancelled request lands here.
+        logger.warn({
+          event: 'extension.late_response',
+          nativeRequestId: requestId,
+          code: 'LATE_RESPONSE',
+        });
       }
       return;
     }
@@ -227,13 +255,28 @@ export class NativeMessagingHost {
     }
 
     return new Promise((resolve, reject) => {
-      const requestId = uuidv4(); // Generate unique request ID
+      // Reuse the caller's correlation id when the payload carries one, so the
+      // dispatch site and this transport log the same value for one round trip.
+      const callerRequestId = messagePayload?.context?.requestId;
+      const requestId =
+        options.requestId ??
+        (typeof callerRequestId === 'string' && callerRequestId ? callerRequestId : uuidv4());
+      const elapsed = startTimer();
+      const toolName = messagePayload?.name;
 
       const timeoutId = setTimeout(() => {
         const pending = this.takePendingRequest(requestId);
         if (!pending) return;
 
         this.sendToolCancellation(requestId);
+        logger.warn({
+          event: 'extension.timeout',
+          tool: toolName,
+          nativeRequestId: requestId,
+          durationMs: elapsed(),
+          code: 'TIMEOUT',
+          extra: { timeoutMs },
+        });
         pending.reject(
           new Error(
             `Request timed out after ${timeoutMs}ms: the Chrome extension did not respond. ` +
@@ -248,6 +291,13 @@ export class NativeMessagingHost {
             if (!pending) return;
 
             this.sendToolCancellation(requestId);
+            logger.info({
+              event: 'extension.cancelled',
+              tool: toolName,
+              nativeRequestId: requestId,
+              durationMs: elapsed(),
+              code: 'CANCELLED',
+            });
             pending.reject(createAbortError());
           }
         : undefined;
@@ -260,6 +310,8 @@ export class NativeMessagingHost {
         signal: options.signal,
         abortListener,
         onProgress: options.onProgress,
+        toolName,
+        startedAt: elapsed,
       });
       if (abortListener) {
         options.signal!.addEventListener('abort', abortListener, { once: true });

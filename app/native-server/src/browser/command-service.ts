@@ -12,6 +12,7 @@ import {
   type ScanOptions,
 } from './protocol';
 import { dispatchBrowserTool, ToolInputError, validateBrowserToolArguments } from './tool-dispatch';
+import { logger, startTimer } from '../util/diag-log';
 
 interface ElementTarget {
   ref: string;
@@ -105,20 +106,39 @@ async function withSignal<T>(pending: Promise<T>, signal: AbortSignal): Promise<
 
 export class BrowserCommandService {
   private readonly sessions = new Map<string, BrowserSession>();
+  /**
+   * Correlation id of the command currently executing, so every tool call it fans
+   * out to can be grouped under one CLI request without threading a parameter
+   * through every helper.
+   */
+  private activeCommandId = '';
 
   constructor(private readonly getHost: () => NativeMessagingHost | null) {}
 
-  async execute(raw: unknown, signal: AbortSignal): Promise<BrowserCommandResponse> {
+  async execute(
+    raw: unknown,
+    signal: AbortSignal,
+    correlationId?: string,
+  ): Promise<BrowserCommandResponse> {
     const parsed = browserCommandSchema.safeParse(raw);
     if (!parsed.success) {
-      return browserFailure(
-        'INVALID_ARGUMENT',
-        parsed.error.issues
-          .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
-          .join('; '),
-      );
+      const message = parsed.error.issues
+        .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
+        .join('; ');
+      const sessionName =
+        isRecord(raw) && typeof raw.session === 'string' ? raw.session : 'default';
+      logger.warn({
+        event: 'command.rejected',
+        session: sessionName,
+        tool: isRecord(raw) && typeof raw.command === 'string' ? raw.command : 'unknown',
+        code: 'INVALID_ARGUMENT',
+        error: message,
+      });
+      return browserFailure('INVALID_ARGUMENT', message);
     }
     const command = parsed.data;
+    const elapsed = startTimer();
+    this.activeCommandId = correlationId ?? randomUUID();
     if (signal.aborted) {
       return {
         ...browserFailure(
@@ -177,6 +197,16 @@ export class BrowserCommandService {
       signal.throwIfAborted();
       const result = await this.run(command, session, state, signal);
       signal.throwIfAborted();
+      logger.info({
+        event: 'command.done',
+        requestId: this.activeCommandId,
+        session: session.id,
+        tool: command.command,
+        durationMs: elapsed(),
+        phase: state.phase,
+        actionStatus: state.actionStatus,
+        completed: state.completed,
+      });
       return { ok: true, session: command.session, result };
     } catch (error) {
       const cause = signal.aborted ? signal.reason : error;
@@ -205,6 +235,18 @@ export class BrowserCommandService {
       ) {
         state.actionStatus = state.completed > 0 ? 'partial' : 'not_started';
       }
+      logger.warn({
+        event: 'command.failed',
+        requestId: this.activeCommandId,
+        session: session.id,
+        tool: command.command,
+        durationMs: elapsed(),
+        phase: state.phase,
+        actionStatus: state.actionStatus,
+        completed: state.completed,
+        code,
+        error: message,
+      });
       return {
         ok: false,
         session: command.session,
@@ -238,18 +280,71 @@ export class BrowserCommandService {
     validateBrowserToolArguments(name, args);
     const host = this.getHost();
     if (!host) throw new BrowserCommandError('BRIDGE_UNAVAILABLE', 'Native host is not connected');
-    const result = await withSignal(
-      dispatchBrowserTool(
-        host,
-        name,
-        args,
-        { transport: 'cli', sessionId: `cli:${session.id}`, requestId: randomUUID(), documentId },
-        { signal },
-      ),
-      signal,
-    );
-    signal.throwIfAborted();
-    return decodeToolResult(result);
+    const nativeRequestId = randomUUID();
+    const elapsed = startTimer();
+    const tabId = typeof args.tabId === 'number' ? args.tabId : undefined;
+    const frameId = typeof args.frameId === 'number' ? args.frameId : undefined;
+    logger.info({
+      event: 'tool.start',
+      requestId: this.activeCommandId,
+      session: session.id,
+      tool: name,
+      nativeRequestId,
+      tabId,
+      frameId,
+      extra: { documentId: documentId ? 'yes' : 'no' },
+    });
+    try {
+      const result = await withSignal(
+        dispatchBrowserTool(
+          host,
+          name,
+          args,
+          {
+            transport: 'cli',
+            sessionId: `cli:${session.id}`,
+            requestId: nativeRequestId,
+            documentId,
+          },
+          { signal, requestId: nativeRequestId },
+        ),
+        signal,
+      );
+      signal.throwIfAborted();
+      logger.info({
+        event: 'tool.ok',
+        requestId: this.activeCommandId,
+        session: session.id,
+        tool: name,
+        nativeRequestId,
+        tabId,
+        durationMs: elapsed(),
+      });
+      return decodeToolResult(result);
+    } catch (error) {
+      const cause = signal.aborted ? signal.reason : error;
+      const message = errorMessage(cause);
+      logger[
+        cause instanceof BrowserCommandError && cause.code === 'STALE_DOCUMENT' ? 'warn' : 'error'
+      ]({
+        event: 'tool.failed',
+        requestId: this.activeCommandId,
+        session: session.id,
+        tool: name,
+        nativeRequestId,
+        tabId,
+        frameId,
+        durationMs: elapsed(),
+        code:
+          cause instanceof BrowserCommandError
+            ? cause.code
+            : cause instanceof Error && cause.name === 'AbortError'
+              ? 'CANCELLED'
+              : 'BROWSER_ERROR',
+        error: message,
+      });
+      throw cause instanceof Error || signal.aborted ? cause : error;
+    }
   }
 
   private async scan(session: BrowserSession, signal: AbortSignal, options = session.scanOptions) {
