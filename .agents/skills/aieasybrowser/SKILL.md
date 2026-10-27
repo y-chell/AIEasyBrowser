@@ -56,26 +56,20 @@ Exit codes: `0` success, `2` invalid arguments, `3` operation/timeout failure, `
 
 ## Coordinates and trusted input
 
-`chrome_computer` coordinates are **viewport CSS pixels**, not screenshot pixels. Screenshot files are written at `viewport × devicePixelRatio` (on a 1.25 DPR display a 1536×695 viewport produces a 1920×869 PNG). Measuring a target in a saved screenshot and passing those numbers straight to `coordinates` lands up and to the left of the real element by the DPR factor. Get the click point from the page instead:
+`chrome_computer` coordinates are **viewport CSS pixels**. Saved screenshots are written at `viewport × devicePixelRatio`, so on a 1.25 DPR display a 1536×695 viewport produces a 1920×869 PNG. Measuring a target in that PNG and passing the numbers straight to `coordinates` lands up and to the left of the real element. Get the click point from the page instead — `getBoundingClientRect()` and the `elementInfo.rect` echoed by a click response are both already in CSS pixels and can be reused directly:
 
 ```sh
 aieasybrowser --session task use 123
-aieasybrowser --session task eval 'const r = document.querySelector(".cf-turnstile").getBoundingClientRect(); return {x: Math.round(r.x + 24), y: Math.round(r.y + r.height / 2)}'
+aieasybrowser --session task eval 'const r = document.querySelector("#target").getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}'
 ```
 
-`getBoundingClientRect()` already returns CSS pixels, and `elementInfo.rect` in a click response does too, so both can be reused directly. Re-measure after any layout shift — a toast or a bottom banner changes `y` for the whole page.
+Re-measure after any layout shift. A toast, a cookie banner, or a fixed bottom card changes `y` for the whole page, and the numbers you measured a minute ago no longer point at the element.
 
-`chrome_computer` dispatches `Input.dispatchMouseEvent`, which is trusted input. Prefer it over DOM `click()` when a control checks `event.isTrusted`.
+`chrome_computer` dispatches `Input.dispatchMouseEvent`, which is trusted input. Prefer it over DOM `.click()` when a control checks `event.isTrusted`, and over `ref`-based clicks when the element lives in a cross-origin frame.
 
-Single `left_click` is not enough for some widgets. Cloudflare Turnstile ignores one synthesized press/release pair but accepts `double_click` at the same point. When a single click reports success but the widget state does not change, retry with `double_click` before concluding that the target is unclickable:
+A single `left_click` is not always enough. Some widgets (Cloudflare Turnstile among them) ignore one synthesized press/release pair but accept a `double_click` at the same point. The rule that generalizes: **when a click reports success but the widget state does not change, retry once with `double_click` before concluding the target is unclickable.** Do not report a click as working based on its response — verify the effect.
 
-```sh
-aieasybrowser --session task call chrome_computer '{"action":"double_click","coordinates":{"x":601,"y":432}}'
-```
-
-Confirm the effect from page state rather than the click response. For Turnstile, read the hidden field: a non-empty `[name=cf-turnstile-response]` (a solved token is several hundred characters) means the challenge passed.
-
-A cross-origin widget such as `challenges.cloudflare.com` renders inside an iframe that the main document's DOM cannot see, and `Page.getFrameTree` does not list it. `chrome_list_frames` still reports its frame ID and title. Do not read that as "the widget failed to render": if the container has a real bounding box, click it by coordinates. `scan --frame <id>` fails with `Frame documentId is unavailable` on such frames, which is expected and does not block coordinate clicks.
+Cross-origin widgets render inside iframes the main document cannot see. `Page.getFrameTree` may not list them while `chrome_list_frames` reports the frame ID and title, and `scan --frame <id>` can fail with `Frame documentId is unavailable`. None of that means the widget failed to render. If the container has a real bounding box, click it by coordinate.
 
 ## Advanced operations
 
