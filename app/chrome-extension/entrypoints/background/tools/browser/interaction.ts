@@ -1,5 +1,6 @@
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
@@ -35,7 +36,11 @@ class ClickTool extends BaseBrowserToolExecutor {
   /**
    * Execute click operation
    */
-  async execute(args: ClickToolParams): Promise<ToolResult> {
+  async execute(
+    args: ClickToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
+    const documentId = executionContext?.documentId;
     const {
       selector,
       selectorType = 'css',
@@ -78,6 +83,7 @@ class ClickTool extends BaseBrowserToolExecutor {
           'ISOLATED',
           typeof frameId !== 'number',
           typeof frameId === 'number' ? [frameId] : undefined,
+          documentId,
         );
         try {
           const resolved = await this.sendMessageToTab(
@@ -88,6 +94,7 @@ class ClickTool extends BaseBrowserToolExecutor {
               isXPath: true,
             },
             frameId,
+            documentId,
           );
           if (resolved && resolved.success && resolved.ref) {
             finalRef = resolved.ref;
@@ -113,7 +120,9 @@ class ClickTool extends BaseBrowserToolExecutor {
         'ISOLATED',
         false,
         typeof targetFrameId === 'number' ? [targetFrameId] : undefined,
+        documentId,
       );
+      executionContext?.signal?.throwIfAborted();
 
       // Send click message to content script
       const result = await this.sendMessageToTab(
@@ -132,6 +141,7 @@ class ClickTool extends BaseBrowserToolExecutor {
           modifiers,
         },
         targetFrameId,
+        documentId,
       );
 
       const clickMethod =
@@ -191,7 +201,11 @@ class FillTool extends BaseBrowserToolExecutor {
   /**
    * Execute fill operation
    */
-  async execute(args: FillToolParams): Promise<ToolResult> {
+  async execute(
+    args: FillToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
+    const documentId = executionContext?.documentId;
     const { selector, selectorType = 'css', ref, value, frameId } = args;
 
     console.log(`Starting fill operation with options:`, args);
@@ -224,6 +238,7 @@ class FillTool extends BaseBrowserToolExecutor {
           'ISOLATED',
           typeof frameId !== 'number',
           typeof frameId === 'number' ? [frameId] : undefined,
+          documentId,
         );
         try {
           const resolved = await this.sendMessageToTab(
@@ -234,6 +249,7 @@ class FillTool extends BaseBrowserToolExecutor {
               isXPath: true,
             },
             frameId,
+            documentId,
           );
           if (resolved && resolved.success && resolved.ref) {
             finalRef = resolved.ref;
@@ -259,7 +275,9 @@ class FillTool extends BaseBrowserToolExecutor {
         'ISOLATED',
         false,
         typeof targetFrameId === 'number' ? [targetFrameId] : undefined,
+        documentId,
       );
+      executionContext?.signal?.throwIfAborted();
 
       // Send fill message to content script
       const result = await this.sendMessageToTab(
@@ -271,6 +289,7 @@ class FillTool extends BaseBrowserToolExecutor {
           value,
         },
         targetFrameId,
+        documentId,
       );
 
       if (result && result.error) {

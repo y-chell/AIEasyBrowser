@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { program } from 'commander';
+import { program, CommanderError } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -12,6 +12,8 @@ import {
 import { BrowserType, parseBrowserType } from './scripts/browser-config';
 import { runDoctor } from './scripts/doctor';
 import { runReport } from './scripts/report';
+import { registerBrowserCommands, BROWSER_COMMAND_NAMES, browserExitCode } from './browser/cli';
+import { BrowserCommandError, browserFailure } from './browser/protocol';
 
 program
   .version(require('../package.json').version)
@@ -162,9 +164,29 @@ program
     }
   });
 
-program.parse(process.argv);
+registerBrowserCommands(program);
 
-// If no command provided, show help
-if (!process.argv.slice(2).length) {
-  program.outputHelp();
+const browserInvocation = process.argv.slice(2).some((arg) => BROWSER_COMMAND_NAMES.has(arg));
+program.exitOverride();
+if (browserInvocation) program.configureOutput({ outputError: () => undefined });
+
+async function main() {
+  try {
+    await program.parseAsync(process.argv);
+    if (!process.argv.slice(2).length) program.outputHelp();
+  } catch (error) {
+    if (error instanceof CommanderError && error.exitCode === 0) return;
+    if (!browserInvocation && !(error instanceof BrowserCommandError)) {
+      process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
+      return;
+    }
+    const response = browserFailure(
+      error instanceof BrowserCommandError ? error.code : 'INVALID_ARGUMENT',
+      error instanceof Error ? error.message : String(error),
+    );
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+    process.exitCode = browserExitCode(response);
+  }
 }
+
+void main();

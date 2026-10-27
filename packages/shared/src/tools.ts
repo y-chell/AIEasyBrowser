@@ -677,7 +677,7 @@ const RAW_TOOL_SCHEMAS: Tool[] = [
   {
     name: TOOL_NAMES.BROWSER.WAIT_FOR,
     description:
-      'Wait for a browser condition to become true. Prefer this over ad-hoc polling JS for common checks such as element visibility, text changes, URL/title changes, JS predicates, network requests, network idle, and downloads.',
+      'Wait for a browser condition to become true. Prefer this over ad-hoc polling JS for common checks such as element visibility, text changes, URL/title changes, JS predicates, network requests, network idle, and downloads. Synchronous JavaScript predicates reuse the chrome_javascript execution engine (CDP by default; explicit nonzero frameId uses its ISOLATED frame execution) and may show Chrome debugger notifications.',
     inputSchema: {
       type: 'object',
       properties: {

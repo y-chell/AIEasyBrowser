@@ -276,3 +276,112 @@ describe('session cancellation and target ownership', () => {
     expect(nextExecute).toHaveBeenCalledOnce();
   });
 });
+
+describe('CLI document-bound execution', () => {
+  beforeEach(() => {
+    (chrome as any).webNavigation = {
+      getFrame: vi.fn(async () => ({ documentId: 'doc-old', frameId: 5 })),
+    };
+  });
+
+  test('passes the checked document into execution while keeping CLI target state in the bridge', async () => {
+    const execute = vi.fn(async () => result(8));
+    await runBrowserToolCallWithIsolation(
+      'chrome_click_element',
+      { tabId: 8, frameId: 5, ref: 'ref_1' },
+      { sessionId: 'cli-A', transport: 'cli', documentId: 'doc-old' },
+      execute,
+    );
+    expect(chrome.webNavigation.getFrame).toHaveBeenCalledWith({ tabId: 8, frameId: 5 });
+    expect(execute).toHaveBeenCalledWith(
+      { tabId: 8, frameId: 5, ref: 'ref_1' },
+      { documentId: 'doc-old', strictTarget: true },
+    );
+    expect(getBrowserToolSessionBinding('cli-A')).toBeUndefined();
+  });
+
+  test.each([null, { documentId: 'doc-new' }, { frameId: 5 }])(
+    'rejects stale or missing document identity before executing: %j',
+    async (frame) => {
+      vi.mocked(chrome.webNavigation.getFrame).mockResolvedValue(frame as any);
+      const execute = vi.fn(async () => result(8));
+      await expect(
+        runBrowserToolCallWithIsolation(
+          'chrome_click_element',
+          { tabId: 8, frameId: 5 },
+          { transport: 'cli', documentId: 'doc-old' },
+          execute,
+        ),
+      ).rejects.toThrow('STALE_DOCUMENT');
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  test('rejects a closed explicit CLI tab without selecting the active tab', async () => {
+    vi.mocked(chrome.tabs.get).mockRejectedValue(new Error('No tab'));
+    const execute = vi.fn(async () => result(7));
+    await expect(
+      runBrowserToolCallWithIsolation(
+        'chrome_scan_compact',
+        { tabId: 8 },
+        { transport: 'cli' },
+        execute,
+      ),
+    ).rejects.toThrow('TARGET_CLOSED');
+    expect(execute).not.toHaveBeenCalled();
+    expect(chrome.tabs.query).not.toHaveBeenCalled();
+  });
+
+  test('checks document identity only after acquiring the target lock', async () => {
+    const slow = deferred<ReturnType<typeof result>>();
+    const firstExecute = vi.fn(() => slow.promise);
+    const first = runBrowserToolCallWithIsolation(
+      'chrome_read_page',
+      { tabId: 8 },
+      { sessionId: 'other' },
+      firstExecute,
+    );
+    await vi.waitFor(() => expect(firstExecute).toHaveBeenCalledOnce());
+    const execute = vi.fn(async () => result(8));
+    const next = runBrowserToolCallWithIsolation(
+      'chrome_click_element',
+      { tabId: 8, frameId: 5 },
+      { transport: 'cli', sessionId: 'cli-A', documentId: 'doc-old' },
+      execute,
+    ).catch((error: Error) => error);
+    await Promise.resolve();
+    expect(chrome.webNavigation.getFrame).not.toHaveBeenCalled();
+    vi.mocked(chrome.webNavigation.getFrame).mockResolvedValue({ documentId: 'doc-new' } as any);
+    slow.resolve(result(8));
+    await first;
+    expect(await next).toMatchObject({ message: expect.stringContaining('STALE_DOCUMENT') });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('does not execute after a cancelled document lookup finishes late', async () => {
+    const lookup = deferred<any>();
+    vi.mocked(chrome.webNavigation.getFrame).mockReturnValue(lookup.promise);
+    const controller = new AbortController();
+    const execute = vi.fn(async () => result(8));
+    const pending = runBrowserToolCallWithIsolation(
+      'chrome_click_element',
+      { tabId: 8 },
+      { transport: 'cli', sessionId: 'cli-A', documentId: 'doc-old' },
+      execute,
+      { signal: controller.signal },
+    ).catch((error: Error) => error);
+    await vi.waitFor(() => expect(chrome.webNavigation.getFrame).toHaveBeenCalledOnce());
+    controller.abort();
+    expect(await pending).toMatchObject({ name: 'AbortError' });
+    await runBrowserToolCallWithIsolation(
+      'chrome_read_page',
+      { tabId: 9 },
+      { transport: 'cli', sessionId: 'cli-A' },
+      async () => result(9),
+    );
+    lookup.resolve({ documentId: 'doc-old' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(execute).not.toHaveBeenCalled();
+    expect(getBrowserToolSessionBinding('cli-A')).toBeUndefined();
+  });
+});

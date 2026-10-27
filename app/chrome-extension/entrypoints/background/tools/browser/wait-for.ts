@@ -6,6 +6,7 @@ import {
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { computerTool } from './computer';
+import { javascriptTool } from './javascript';
 import { waitForNetworkIdle } from './network-idle';
 import type { BrowserToolExecutionContext } from '../browser-session-context';
 
@@ -146,7 +147,6 @@ function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
 }
 
 function raceWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
-  throwIfAborted(signal);
   if (!signal) return operation;
 
   return new Promise((resolve, reject) => {
@@ -157,10 +157,8 @@ function raceWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<
     };
 
     signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
+    // The operation already exists; consume its eventual rejection even if it cancelled
+    // synchronously before we installed this listener.
     operation.then(
       (value) => {
         cleanup();
@@ -171,6 +169,7 @@ function raceWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<
         reject(error);
       },
     );
+    if (signal.aborted) onAbort();
   });
 }
 
@@ -381,75 +380,44 @@ abstract class WaitToolsBase extends BaseBrowserToolExecutor {
     const condition = args.condition as Extract<WaitCondition, { kind: 'javascript' }>;
     const timeoutMs = this.getTimeoutMs(args);
     const pollIntervalMs = this.getPollIntervalMs(args);
-    const frameIds = typeof args.frameId === 'number' ? [args.frameId] : undefined;
+    // Page-world eval/new Function obeys the site's CSP. Use the existing JS execution
+    // engine instead, and return only a boolean so sanitization cannot alter the predicate.
+    const code = `
+const candidate = (() => (${condition.predicate}))();
+const value = typeof candidate === 'function' ? candidate() : candidate;
+if (value && typeof value.then === 'function') {
+  throw new Error('JavaScript predicates must be synchronous: the predicate returned a Promise.');
+}
+return !!value;
+`;
 
-    const result = await this.pollUntil(
+    const result = await this.pollUntil<unknown>(
       timeoutMs,
       pollIntervalMs,
       async () => {
-        const injected = await chrome.scripting.executeScript({
-          target: { tabId: tab.id!, frameIds } as chrome.scripting.InjectionTarget,
-          world: 'MAIN',
-          // Kept synchronous on purpose: each poll should be a cheap snapshot. (The earlier
-          // `result === null` bug came from the es2015 build target rewriting `async` into a
-          // bundle-only `__async` helper; see wxt.config.ts.)
-          func: (predicate: string) => {
-            const source = String(predicate || '').trim();
-            try {
-              let value: unknown;
-
-              if (
-                source.startsWith('function') ||
-                source.startsWith('async function') ||
-                source.startsWith('(') ||
-                source.startsWith('async (')
-              ) {
-                const fn = window.eval(`(${source})`);
-                value = typeof fn === 'function' ? fn() : fn;
-              } else {
-                value = new Function(`return (${source});`)();
-              }
-
-              if (value && typeof (value as Promise<unknown>).then === 'function') {
-                return {
-                  success: false,
-                  error:
-                    'JavaScript predicates must be synchronous: the predicate returned a Promise.',
-                };
-              }
-
-              return { success: true, value };
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              return {
-                success: false,
-                error:
-                  error instanceof SyntaxError && /\bawait\b/.test(source)
-                    ? `JavaScript predicates must be synchronous and cannot await: ${message}`
-                    : message,
-              };
-            }
-          },
-          args: [condition.predicate],
+        throwIfAborted(executionContext?.signal);
+        const executed = await javascriptTool.execute({
+          tabId: tab.id!,
+          frameId: args.frameId,
+          code,
+          timeoutMs: Math.max(1, timeoutMs),
+          maxOutputBytes: 1024,
         });
-
-        const observed = Array.isArray(injected) ? injected[0]?.result : undefined;
-        const success =
-          observed && typeof observed === 'object' && (observed as any).success === true;
-        if (!success) {
-          return {
-            matched: false,
-            observed,
-            error:
-              observed && typeof observed === 'object'
-                ? String((observed as any).error || 'predicate failed')
-                : 'predicate failed',
-          };
+        throwIfAborted(executionContext?.signal);
+        const payload = parseJsonResult(executed);
+        if (executed.isError || payload?.success !== true) {
+          const error = payload?.error as { message?: string } | undefined;
+          throw new Error(
+            error?.message || getFirstText(executed) || 'JavaScript predicate execution failed',
+          );
         }
-
+        if (payload.result !== 'true' && payload.result !== 'false') {
+          throw new Error('JavaScript predicate returned no boolean result');
+        }
+        const observed = payload.result === 'true';
         return {
-          matched: !!(observed as any).value,
-          observed: (observed as any).value,
+          matched: observed,
+          observed,
         };
       },
       (lastObserved) =>

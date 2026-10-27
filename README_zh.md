@@ -6,7 +6,7 @@
 
 [English](README.md)
 
-AIEasyBrowser 是面向 Agent 的浏览器控制工具，通过 MCP 把日常使用的 Chrome 变成 AI 可以读取、操作和验证的浏览器环境。已有标签页、登录态和扩展都留在原来的 Chrome profile 中，不必为自动化重新准备一套浏览器。
+AIEasyBrowser 是面向 Agent 的浏览器控制工具，通过 CLI + Skill 或 MCP，把日常使用的 Chrome 变成 AI 可以读取、操作和验证的浏览器环境。已有标签页、登录态和扩展都留在原来的 Chrome profile 中，不必为自动化重新准备一套浏览器。
 
 目标很明确：让 AI 更方便、更快速、更准确地控制浏览器。减少接入和重连时的人工中断，给 Agent 可定位的页面元素，并让每次操作都有可观察、可验证的结果。
 
@@ -30,7 +30,7 @@ AIEasyBrowser 在安装扩展的 Chrome profile 中执行操作，直接使用�
 
 ### 给 Agent 可操作的目标，而不只是截图
 
-`chrome_scan_compact` 返回有数量上限的页面概览，包含重要文本、表单控件、按钮和元素引用。`chrome_read_page` 提供可见页面的无障碍树，`chrome_query_elements` 提供精确 DOM 查询。
+CLI 的 `scan` 返回有全局数量上限的页面概览，包含重要文本、表单控件、按钮和版本化元素引用。引用绑定命名会话、扫描版本、frame 和 Chrome 文档 ID；刷新同一个 URL 后也会拒绝旧引用。底层还有 `chrome_read_page` 的无障碍树和 `chrome_query_elements` 的精确 DOM 查询。
 
 Agent 可以依据元素引用和选择器执行操作，减少只靠截图猜坐标的步骤；需要视觉定位或真实输入事件时，也有截图、鼠标键盘和 CDP 工具。元素引用对应近期页面状态，导航或目标失效后应重新读取，不长期复用过期引用。
 
@@ -42,7 +42,9 @@ Agent 可以依据元素引用和选择器执行操作，减少只靠截图猜�
 
 ### 把调用次数花在任务上
 
-默认直接公开全部 39 个浏览器工具，常规操作不需要先搜索工具。紧凑扫描限制页面输出量，`chrome_cdp_batch` 可以在一次工具调用中顺序执行多个 CDP 命令，减少协议往返。需要节省初始工具定义上下文时，也可以选择较小的工具目录。
+CLI 不进行 MCP 握手，也不需要预加载完整工具 schema。`act` 在一条命令中顺序执行动作、验证明确的后置条件并返回新扫描。Skill 提供使用规则；高级能力需要时才通过 `tools`、`describe`、`call` 查询和调用。
+
+现有 MCP 接口继续提供全部 39 个浏览器工具。两种入口复用同一扩展和执行内核；CLI 减少的是 Agent 侧的工具定义上下文和任务往返，不意味着每次 Node 冷启动都比已经连接的 MCP 调用快。
 
 ## 能做什么
 
@@ -60,10 +62,10 @@ Agent 可以依据元素引用和选择器执行操作，减少只靠截图猜�
 ## 工作方式
 
 ```text
-MCP 客户端 -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser 扩展 -> 当前 Chrome profile
+CLI / MCP 客户端 -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser 扩展 -> 当前 Chrome profile
 ```
 
-扩展通过 Native Messaging 启动本机桥接器，MCP 客户端再通过 Streamable HTTP 连接。也可以使用项目提供的 STDIO 代理接入；两种方式控制的是同一个 Chrome，不会额外启动浏览器。
+扩展通过 Native Messaging 启动本机桥接器。CLI 直接向本机 `/browser` 发送 JSON 请求，命名会话状态保存在这个已常驻的桥接器中，无需另启 daemon。MCP 客户端通过 Streamable HTTP 或项目提供的 STDIO 代理连接。所有入口控制的是同一个 Chrome，不会额外启动浏览器。
 
 ## 安装
 
@@ -108,6 +110,88 @@ Native Messaging host 名称为 `com.aieasybrowser.nativehost`。注册不会自
 注册完成后，在扩展管理页重新加载一次 AIEasyBrowser。Chrome 保持运行、扩展启用时，扩展会自动建立桥接连接。
 
 Windows 启动器使用构建或注册时写入 `node_path.txt` 的 Node.js 路径，不依赖 Chrome 继承终端的 `PATH`。更换或移动 Node.js、移动构建产物后，需要重新注册；路径记录缺失或无效时会明确报错。
+
+## CLI + Skill
+
+### 注册 CLI 命令
+
+完成构建和 Native Host 注册后，在源码根目录执行：
+
+```powershell
+Push-Location app/native-server
+npm link --ignore-scripts --offline
+Pop-Location
+aieasybrowser health
+```
+
+这会把本地源码包的 CLI 链接到当前 Node.js 的全局命令目录，不下载另一个浏览器工具。更换 Node.js 版本后需重新链接。也可以不注册全局命令，直接执行 `node app/native-server/dist/cli.js health`。
+
+CLI 默认连接 `http://127.0.0.1:12307/browser`，复用已有 host、port 和 bearer token 环境变量。显式指定地址时使用 `--url http://127.0.0.1:12307`，不要传 MCP 的 `?profile=full` 地址。该入口只接受回环来源，并校验 Host、Origin 和配置的 token；不能作为远程 MCP 的绕过入口。
+
+### 安装 Skill
+
+主 Skill 位于 `.agents/skills/aieasybrowser/SKILL.md`，只维护这一份。Codex 支持项目内 `.agents/skills`；需要跨项目使用时，可链接到用户 Skill 目录。Claude Code 支持 `~/.claude/skills` 中的目录链接。
+
+以下 PowerShell 7 命令在源码根目录执行，已有同名目录时会明确报错，不会覆盖：
+
+```powershell
+$skillSource = (Resolve-Path -LiteralPath '.agents/skills/aieasybrowser').Path
+New-Item -ItemType Directory -Force -Path "$HOME/.agents/skills", "$HOME/.claude/skills"
+New-Item -ItemType Junction -Path "$HOME/.agents/skills/aieasybrowser" -Target $skillSource
+New-Item -ItemType Junction -Path "$HOME/.claude/skills/aieasybrowser" -Target $skillSource
+```
+
+移动源码目录后需更新链接。Skill 的发现方式以 [Codex 官方文档](https://developers.openai.com/codex/skills/) 和 [Claude Code 官方文档](https://code.claude.com/docs/en/skills) 为准。它不要求加载 MCP 服务；若同时配置了 MCP，客户端仍可能加载其工具定义，CLI 不会自动修改客户端配置。
+
+### 操作与验证
+
+为每个任务选择命名会话，后续命令保持同一个 `--session`。`tabs` 列出真实标签，`use` 选择目标而不改变浏览器焦点，`scan` 生成可操作引用：
+
+```powershell
+aieasybrowser --session github tabs --match github
+aieasybrowser --session github use 123
+aieasybrowser --session github scan --limit 40 --text 10
+```
+
+把示例 tab ID 和 ref 换成刚返回的值。常见动作可以直接调用，也可以组合成一条命令：
+
+```powershell
+aieasybrowser --session github fill <ref> "search terms"
+aieasybrowser --session github click <ref> --expect '{"kind":"text","text":"Results"}'
+aieasybrowser --session github act '[{"op":"fill","ref":"<ref>","value":"terms"},{"op":"press","keys":"Enter"}]' --expect '{"kind":"element","selector":"#results","state":"visible"}'
+```
+
+`fill` 的值默认是字符串；复选框的布尔值使用 `fill <ref> false --json-value`。`press` 操作已扫描 frame 内的焦点元素，不接受 ref；iframe 使用 `--frame <id>`。JSON 参数接受 `@file` 或 `@-` 从文件或 stdin 读取，避免复杂 shell 转义。
+
+`act` 最多顺序执行 20 个 `click` / `fill` / `press` 动作，可检查 `element`、`text`、`url`、`title`、同步 `javascript` 或 `networkIdle` 后置条件，默认返回新扫描。异步页面动作应提供网站特定的后置条件；工具不会猜测“点击成功”是否等于任务完成。`wait '<条件 JSON>'` 只等待条件并重新扫描，不重放动作。`open <url>` 按底层规则打开或复用 URL，`open --current` 导航已选标签；打开不等于页面已就绪。
+
+JavaScript 条件复用 `chrome_javascript` 的执行引擎：顶层页面默认使用 CDP，不再在网页 MAIN world 中动态 eval 条件字符串，可能显示 Chrome 调试提示；显式非零 `frameId` 使用该工具的 ISOLATED frame 执行，访问的是该 world 的环境。需要 iframe 的页面主世界或跨域 CDP context 时，使用已有 CDP 工具。执行、语法或序列化错误会立即失败，不再当作“条件暂未满足”反复等待；要等待尚不存在的对象，谓词应显式返回 `false`，而不是解引用空对象。
+
+默认扫描最多返回 40 个元素、10 个文本块、20 个 frame 摘要和 10 条 frame 错误，元素/文本限制是整页全局预算，而非每个 iframe 单独计算。`truncated: true` 或非空 `errors` 不代表已经看到完整页面；可指定 `scan --frame <id>` 或调整预算。表单值不自动回显，受保护字段会标记 `protected`。
+
+每条操作命令 stdout 输出一份 JSON。退出码：`0` 成功、`2` 参数错误、`3` 操作或超时失败、`4` 连接/协议失败、`130` 取消。默认整条命令超时 60 秒，可用 `--timeout <毫秒>` 调整，最大 120 秒。
+
+失败必须同时看 `phase`、`actionStatus`、`completed` 和 `failedAction`：
+
+- `expect` / `scan` 阶段失败且 `actionStatus: "completed"`：动作已经执行，不要因为验证失败重做动作。
+- `actionStatus: "unknown"`：超时、断开或执行失败时，已发出的动作可能已经发生；先观察页面，再决定是否重试。
+- `STALE_REF` / `STALE_DOCUMENT`：重新扫描，不把旧引用替换成看起来相似的 `ref_1`。
+- `SESSION_BUSY`：同一任务已有命令执行中，不交错发送整条工作流。不同 session 也不保证并发修改同一个页面安全。
+
+新扫描、动作、目标切换、导航、`eval` 和高级 `call` 都会让旧句柄过期；`--no-scan` 只是不输出新扫描，仍会使旧引用失效。刷新或跨文档导航会额外触发文档身份检查。同 URL 的 SPA 更新可能仍是同一文档，引用的元素若已从 DOM 移除，底层工具仍会明确报错。
+
+高级工具按需使用，不在 Skill 中重复完整目录：
+
+```powershell
+aieasybrowser tools screenshot
+aieasybrowser describe chrome_screenshot
+aieasybrowser --session github call chrome_screenshot '{"savePng":true}'
+aieasybrowser --session github eval 'return document.title'
+aieasybrowser session --list
+aieasybrowser --session github session --forget
+```
+
+`call` 仅在 session 已选择目标、且工具接受 `tabId` 时补入该目标；没有已选目标时保留工具原来的默认规则，系统剪贴板读写等操作无需先选择标签。其他工具遵循自己的 URL/活动标签规则，例如抓包工具没有 `tabId`。不带 tab IDs 或 URL 的 `chrome_close_tabs` 必须有已选目标，只关闭该 session 的标签，不默认关闭用户当前活动页。高级调用继续拒绝未声明的顶层参数，但不是完整 JSON Schema 校验器。最多保留 64 个任务 session；`session --forget` 只清状态，不关闭标签。桥接器/扩展重启后状态不持久化，需重新选择真实标签并扫描，旧句柄不会自动恢复或重放。
 
 ## MCP 连接
 

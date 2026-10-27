@@ -1,5 +1,6 @@
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
@@ -23,7 +24,12 @@ class KeyboardTool extends BaseBrowserToolExecutor {
   /**
    * Execute keyboard operation
    */
-  async execute(args: KeyboardToolParams): Promise<ToolResult> {
+  async execute(
+    args: KeyboardToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
+    const documentId = executionContext?.documentId;
+    const frameIds = typeof args.frameId === 'number' ? [args.frameId] : undefined;
     const { keys, selector, selectorType = 'css', delay = TIMEOUTS.KEYBOARD_DELAY } = args;
 
     console.log(`Starting keyboard operation with options:`, args);
@@ -45,17 +51,30 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       let refForFocus: string | undefined = undefined;
 
       // Ensure helper is loaded for XPath or potential focus operations
-      await this.injectContentScript(tab.id, ['inject-scripts/accessibility-tree-helper.js']);
+      await this.injectContentScript(
+        tab.id,
+        ['inject-scripts/accessibility-tree-helper.js'],
+        false,
+        'ISOLATED',
+        false,
+        frameIds,
+        documentId,
+      );
 
       // If selector is XPath, convert to ref then try to get CSS selector
       if (selector && selectorType === 'xpath') {
         try {
           // First convert XPath to ref
-          const ensured = await this.sendMessageToTab(tab.id, {
-            action: TOOL_MESSAGE_TYPES.ENSURE_REF_FOR_SELECTOR,
-            selector,
-            isXPath: true,
-          });
+          const ensured = await this.sendMessageToTab(
+            tab.id,
+            {
+              action: TOOL_MESSAGE_TYPES.ENSURE_REF_FOR_SELECTOR,
+              selector,
+              isXPath: true,
+            },
+            args.frameId,
+            documentId,
+          );
           if (!ensured || !ensured.success || !ensured.ref) {
             return createErrorResponse(
               `Failed to resolve XPath selector: ${ensured?.error || 'unknown error'}`,
@@ -63,10 +82,15 @@ class KeyboardTool extends BaseBrowserToolExecutor {
           }
           refForFocus = ensured.ref;
           // Try to resolve ref to CSS selector
-          const resolved = await this.sendMessageToTab(tab.id, {
-            action: TOOL_MESSAGE_TYPES.RESOLVE_REF,
-            ref: ensured.ref,
-          });
+          const resolved = await this.sendMessageToTab(
+            tab.id,
+            {
+              action: TOOL_MESSAGE_TYPES.RESOLVE_REF,
+              ref: ensured.ref,
+            },
+            args.frameId,
+            documentId,
+          );
           if (resolved && resolved.success && resolved.selector) {
             finalSelector = resolved.selector;
             refForFocus = undefined; // Prefer CSS selector if available
@@ -81,10 +105,15 @@ class KeyboardTool extends BaseBrowserToolExecutor {
 
       // If we have a ref but no CSS selector, focus the element via helper
       if (refForFocus) {
-        const focusResult = await this.sendMessageToTab(tab.id, {
-          action: 'focusByRef',
-          ref: refForFocus,
-        });
+        const focusResult = await this.sendMessageToTab(
+          tab.id,
+          {
+            action: 'focusByRef',
+            ref: refForFocus,
+          },
+          args.frameId,
+          documentId,
+        );
         if (focusResult && !focusResult.success) {
           return createErrorResponse(
             `Failed to focus element by ref: ${focusResult.error || 'unknown error'}`,
@@ -94,7 +123,6 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         finalSelector = undefined;
       }
 
-      const frameIds = typeof args.frameId === 'number' ? [args.frameId] : undefined;
       await this.injectContentScript(
         tab.id,
         ['inject-scripts/keyboard-helper.js'],
@@ -102,7 +130,9 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         'ISOLATED',
         false,
         frameIds,
+        documentId,
       );
+      executionContext?.signal?.throwIfAborted();
 
       // Send keyboard simulation message to content script
       const result = await this.sendMessageToTab(
@@ -114,6 +144,7 @@ class KeyboardTool extends BaseBrowserToolExecutor {
           delay,
         },
         args.frameId,
+        documentId,
       );
 
       if (result.error) {

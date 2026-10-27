@@ -6,11 +6,14 @@ export interface BrowserToolCallContext {
   requestId?: string;
   transport?: string;
   nativeRequestId?: string;
+  documentId?: string;
 }
 
 export interface BrowserToolExecutionContext {
   signal?: AbortSignal;
   reportProgress?: (progress: NativeToolProgress) => void | Promise<void>;
+  documentId?: string;
+  strictTarget?: boolean;
 }
 
 interface BrowserSessionBinding {
@@ -222,6 +225,8 @@ async function prepareToolArgs(
   signal?: AbortSignal,
 ): Promise<PreparedToolCall> {
   const args = isPlainObject(rawArgs) ? { ...rawArgs } : {};
+  // CLI workflows own their target in the bridge; do not resolve a second implicit target.
+  if (context?.transport === 'cli') return { args };
   const sessionId = normalizeSessionId(context);
   if (!sessionId || !SESSION_AWARE_TOOLS.has(toolName)) {
     return { args };
@@ -521,9 +526,34 @@ export async function runBrowserToolCallWithIsolation(
       getTargetQueueKeys(prepared.args),
       async () => {
         throwIfAborted(signal);
-        const result = await execute(prepared.args, executionContext);
+        if (context?.transport === 'cli' && typeof prepared.args.tabId === 'number') {
+          const tab = await getTab(prepared.args.tabId);
+          throwIfAborted(signal);
+          if (!tab) throw new Error('TARGET_CLOSED: select an existing tab with use or open');
+        }
+        if (context?.documentId) {
+          const frame = await chrome.webNavigation.getFrame({
+            tabId: prepared.args.tabId,
+            frameId: prepared.args.frameId ?? 0,
+          });
+          throwIfAborted(signal);
+          if (!frame || frame.documentId !== context.documentId) {
+            throw new Error('STALE_DOCUMENT: the page navigated or refreshed; scan again');
+          }
+        }
+        const boundExecution =
+          context?.transport === 'cli' || context?.documentId
+            ? {
+                ...executionContext,
+                documentId: context.documentId,
+                strictTarget: context.transport === 'cli',
+              }
+            : executionContext;
+        const result = await execute(prepared.args, boundExecution);
         throwIfAborted(signal);
-        await finalizeToolCall(sessionId, toolName, prepared, result, signal);
+        if (context?.transport !== 'cli') {
+          await finalizeToolCall(sessionId, toolName, prepared, result, signal);
+        }
         throwIfAborted(signal);
         return result;
       },

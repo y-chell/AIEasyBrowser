@@ -1,6 +1,6 @@
 import { ToolExecutor } from '@/common/tool-handler';
 import type { ToolResult } from '@/common/tool-handler';
-import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
+import { ERROR_MESSAGES } from '@/common/constants';
 import { getRefTargetFrameId } from '@/utils/ref-target-store';
 
 /**
@@ -20,6 +20,7 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
     world: 'MAIN' | 'ISOLATED' = 'ISOLATED',
     allFrames: boolean = false,
     frameIds?: number[],
+    documentId?: string,
   ): Promise<void> {
     // No "already injected?" probe: every helper carries its own __*_INITIALIZED__ guard, so
     // re-injecting a file is a no-op. The old probe keyed on `${this.name}_ping`, which made a
@@ -27,8 +28,10 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
     // ping (chrome_read_page + interactive-elements-helper), and it also paid a 300ms race on
     // the first injection into a tab.
     try {
-      const target: { tabId: number; allFrames?: boolean; frameIds?: number[] } = { tabId };
-      if (frameIds && frameIds.length > 0) {
+      const target: chrome.scripting.InjectionTarget = { tabId };
+      if (documentId) {
+        target.documentIds = [documentId];
+      } else if (frameIds && frameIds.length > 0) {
         target.frameIds = frameIds;
       } else if (allFrames) {
         target.allFrames = true;
@@ -54,12 +57,18 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
   /**
    * Send message to tab
    */
-  protected async sendMessageToTab(tabId: number, message: any, frameId?: number): Promise<any> {
+  protected async sendMessageToTab(
+    tabId: number,
+    message: any,
+    frameId?: number,
+    documentId?: string,
+  ): Promise<any> {
     try {
       const resolvedFrameId =
         typeof frameId === 'number' ? frameId : this.resolveFrameIdFromMessage(tabId, message);
-      const response =
-        typeof resolvedFrameId === 'number'
+      const response = documentId
+        ? await chrome.tabs.sendMessage(tabId, message, { documentId })
+        : typeof resolvedFrameId === 'number'
           ? await chrome.tabs.sendMessage(tabId, message, { frameId: resolvedFrameId })
           : await chrome.tabs.sendMessage(tabId, message);
 

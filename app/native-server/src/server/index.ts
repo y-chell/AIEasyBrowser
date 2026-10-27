@@ -38,6 +38,8 @@ import {
   McpSessionRegistry,
   type McpSessionTransportMap,
 } from './mcp-session-registry';
+import { BrowserCommandService } from '../browser/command-service';
+import { BrowserCommandError, browserFailure } from '../browser/protocol';
 
 // ============================================================
 // Types
@@ -99,6 +101,7 @@ export class Server {
   private readonly mcpSessions: McpSessionRegistry<ServerMcpTransports>;
   private mcpSessionSweepTimer: NodeJS.Timeout | null = null;
   private mcpSessionSweepInProgress = false;
+  private readonly browserCommands = new BrowserCommandService(() => this.nativeHost);
 
   constructor() {
     this.fastify = Fastify({ logger: SERVER_CONFIG.LOGGER_ENABLED });
@@ -155,6 +158,8 @@ export class Server {
 
     // Extension communication
     this.setupExtensionRoutes();
+
+    this.setupBrowserRoutes();
 
     // MCP routes
     this.setupMcpRoutes();
@@ -239,6 +244,67 @@ export class Server {
               message: `Failed to get response from extension: ${err.message}`,
             });
           }
+        }
+      },
+    );
+  }
+
+  private setupBrowserRoutes(): void {
+    this.fastify.post(
+      '/browser',
+      {
+        preHandler: [
+          async (request, reply) => {
+            if (!isLoopbackRemoteAddress(request.socket.remoteAddress)) {
+              reply
+                .code(403)
+                .send(browserFailure('FORBIDDEN', 'Browser CLI is only available over loopback'));
+            }
+          },
+          this.mcpSecurityGuard,
+        ],
+      },
+      async (request, reply) => {
+        const controller = new AbortController();
+        const rawTimeout = (request.body as { timeoutMs?: unknown } | undefined)?.timeoutMs;
+        const timeoutMs =
+          typeof rawTimeout === 'number' &&
+          Number.isInteger(rawTimeout) &&
+          rawTimeout > 0 &&
+          rawTimeout <= 120_000
+            ? rawTimeout
+            : 60_000;
+        const timer = setTimeout(
+          () =>
+            controller.abort(
+              new BrowserCommandError('TIMEOUT', `Command timed out after ${timeoutMs}ms`),
+            ),
+          timeoutMs,
+        );
+        const disconnected = () => {
+          if (!reply.raw.writableEnded)
+            controller.abort(new BrowserCommandError('CANCELLED', 'CLI client disconnected'));
+        };
+        reply.raw.once('close', disconnected);
+        request.raw.once('aborted', disconnected);
+        try {
+          const response = await this.browserCommands.execute(request.body, controller.signal);
+          const status = response.ok
+            ? 200
+            : response.error?.code === 'INVALID_ARGUMENT'
+              ? 400
+              : response.error?.code === 'SESSION_BUSY'
+                ? 409
+                : response.error?.code === 'BRIDGE_UNAVAILABLE'
+                  ? 503
+                  : response.error?.code === 'TIMEOUT'
+                    ? 504
+                    : 422;
+          if (!reply.raw.destroyed) return reply.code(status).send(response);
+        } finally {
+          clearTimeout(timer);
+          reply.raw.removeListener('close', disconnected);
+          request.raw.removeListener('aborted', disconnected);
         }
       },
     );

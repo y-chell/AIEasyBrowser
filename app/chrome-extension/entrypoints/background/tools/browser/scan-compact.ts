@@ -7,6 +7,7 @@ import { ERROR_MESSAGES } from '@/common/constants';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { rememberRefTargets } from '@/utils/ref-target-store';
 import { BaseBrowserToolExecutor } from '../base-browser';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 
 interface ScanCompactParams {
@@ -23,6 +24,7 @@ interface ScanCompactParams {
 interface FrameDescriptor {
   frameId: number;
   url?: string;
+  documentId?: string;
 }
 
 interface ScanCompactResponse {
@@ -55,18 +57,24 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
     return Math.max(min, Math.min(max, Math.floor(num)));
   }
 
-  private async getReadableFrames(tabId: number): Promise<FrameDescriptor[]> {
+  private async getReadableFrames(tabId: number, strict = false): Promise<FrameDescriptor[]> {
     try {
       const frames = await chrome.webNavigation.getAllFrames({ tabId });
       if (Array.isArray(frames) && frames.length > 0) {
         return frames
           .filter((frame) => Number.isInteger(frame.frameId) && frame.frameId >= 0)
-          .map((frame) => ({ frameId: frame.frameId, url: frame.url }));
+          .map((frame) => ({
+            frameId: frame.frameId,
+            url: frame.url,
+            documentId: frame.documentId,
+          }));
       }
     } catch (error) {
+      if (strict) throw error;
       console.warn('scan_compact: failed to enumerate frames, falling back to top frame', error);
     }
 
+    if (strict) throw new Error('No readable frame documents found');
     return [{ frameId: 0 }];
   }
 
@@ -82,7 +90,11 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
     return total;
   }
 
-  async execute(args: ScanCompactParams): Promise<ToolResult> {
+  async execute(
+    args: ScanCompactParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
+    const strict = executionContext?.strictTarget === true;
     const maxElements = this.clampInt(args?.maxElements ?? 80, 80, 1, 200);
     const maxTextBlocks = this.clampInt(args?.maxTextBlocks ?? 20, 20, 0, 80);
     const includeTextBlocks = args?.includeTextBlocks !== false;
@@ -104,7 +116,7 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
         return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
       }
 
-      const allFrames = await this.getReadableFrames(tab.id);
+      const allFrames = await this.getReadableFrames(tab.id, strict);
       const frames =
         typeof requestedFrameId === 'number'
           ? allFrames.filter((frame) => frame.frameId === requestedFrameId)
@@ -117,14 +129,16 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
             : [{ frameId: 0, url: tab.url }];
       const frameIds = framesToScan.map((frame) => frame.frameId);
 
-      await this.injectContentScript(
-        tab.id,
-        ['inject-scripts/accessibility-tree-helper.js'],
-        false,
-        'ISOLATED',
-        typeof requestedFrameId !== 'number',
-        typeof requestedFrameId === 'number' ? [requestedFrameId] : undefined,
-      );
+      if (!strict) {
+        await this.injectContentScript(
+          tab.id,
+          ['inject-scripts/accessibility-tree-helper.js'],
+          false,
+          'ISOLATED',
+          typeof requestedFrameId !== 'number',
+          typeof requestedFrameId === 'number' ? [requestedFrameId] : undefined,
+        );
+      }
 
       const scannedFrames: Array<Record<string, unknown> & { counts?: Record<string, number> }> =
         [];
@@ -132,6 +146,20 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
 
       for (const frame of framesToScan) {
         try {
+          executionContext?.signal?.throwIfAborted();
+          if (strict) {
+            if (!frame.documentId) throw new Error('Frame documentId is unavailable');
+            await this.injectContentScript(
+              tab.id,
+              ['inject-scripts/accessibility-tree-helper.js'],
+              false,
+              'ISOLATED',
+              false,
+              undefined,
+              frame.documentId,
+            );
+            executionContext?.signal?.throwIfAborted();
+          }
           const response = (await this.sendMessageToTab(
             tab.id,
             {
@@ -143,7 +171,9 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
               includeCoordinates,
             },
             frame.frameId,
+            strict ? frame.documentId : undefined,
           )) as ScanCompactResponse;
+          executionContext?.signal?.throwIfAborted();
 
           if (!response?.success) {
             errors.push(`frame ${frame.frameId}: ${response?.error || 'scan failed'}`);
@@ -159,6 +189,7 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
 
           scannedFrames.push({
             frameId: frame.frameId,
+            documentId: frame.documentId,
             isTopFrame: frame.frameId === 0,
             frameUrl: frame.url || response.url || '',
             title: response.title || '',

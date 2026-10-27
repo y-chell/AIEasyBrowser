@@ -9,9 +9,8 @@ import nativeMessagingHostInstance, {
   type NativeToolProgress,
 } from '../native-messaging-host';
 import { BRIDGE_VERSION } from '../constant';
-import { NativeMessageType, TOOL_SCHEMAS } from 'aieasybrowser-shared';
+import { dispatchBrowserTool } from '../browser/tool-dispatch';
 import type { McpServerContext } from './mcp-server';
-import { getToolCallTimeoutMs } from './tool-timeouts';
 import { getExposedToolSchemas, handleProfileMetaTool, resolveToolProfile } from './tool-profile';
 
 const HEALTH_TOOL_NAME = 'chrome_health';
@@ -192,44 +191,17 @@ const handleToolCall = async (
 ): Promise<CallToolResult> => {
   try {
     throwIfAborted(execution.signal);
-    const tool = TOOL_SCHEMAS.find((item) => item.name === name);
-    if (!tool) throw new Error(`Unknown browser tool: ${name}`);
-    if (tool.inputSchema.additionalProperties === false) {
-      const properties = tool.inputSchema.properties ?? {};
-      const unexpected = Object.keys(args).filter(
-        (key) => !Object.prototype.hasOwnProperty.call(properties, key),
-      );
-      if (unexpected.length > 0) {
-        throw new Error(`Unknown parameter(s) for ${name}: ${unexpected.join(', ')}`);
-      }
-    }
-    const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
-      {
-        name,
-        args,
-        context,
-      },
-      NativeMessageType.CALL_TOOL,
-      getToolCallTimeoutMs(name, args),
+    let result = await dispatchBrowserTool(
+      nativeMessagingHostInstance,
+      name,
+      args,
+      context,
       execution,
     );
-    if (response.status === 'success') {
-      let result = response.data;
-      if (name === HEALTH_TOOL_NAME) {
-        result = appendNativeHealthMetadata(result, context);
-      }
-      return appendLegacyStructuredContent(result);
-    } else {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error calling tool: ${response.error}`,
-          },
-        ],
-        isError: true,
-      };
+    if (name === HEALTH_TOOL_NAME) {
+      result = appendNativeHealthMetadata(result, context);
     }
+    return appendLegacyStructuredContent(result);
   } catch (error: any) {
     return {
       content: [

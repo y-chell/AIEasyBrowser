@@ -6,7 +6,7 @@
 
 [中文介绍与使用指南](README_zh.md)
 
-AIEasyBrowser is an agent-native browser control layer exposed through MCP. It connects AI agents to your everyday Chrome profile, with its open tabs, existing login sessions, and installed extensions.
+AIEasyBrowser is an agent-native browser control layer with a CLI + Skill entrypoint and an existing MCP interface. It connects AI agents to your everyday Chrome profile, with its open tabs, existing login sessions, and installed extensions.
 
 The goal is straightforward: less setup and human interruption, less guesswork when targeting elements, and observable results after each action. Planning and decision-making belong to the agent; AIEasyBrowser provides the browser access, execution, and feedback.
 
@@ -24,13 +24,15 @@ Actions run in the profile where the extension is installed, rather than in a se
 
 ### Give agents actionable page information
 
-`chrome_scan_compact` provides a bounded overview of important text and controls. `chrome_read_page` and `chrome_query_elements` provide element references and DOM information, so agents can target elements instead of relying only on screenshot coordinates.
+CLI `scan` provides a globally bounded overview of important text and controls. Its handles bind the named task session, scan revision, frame, and Chrome document ID, so even a refresh to the same URL rejects old handles. `chrome_read_page` and `chrome_query_elements` provide additional accessibility and DOM information.
 
 `chrome_wait_for` and `chrome_assert` let agents wait for page conditions and verify outcomes. Screenshots, console output, network capture, and `chrome_collect_debug_evidence` help explain failures instead of leaving the agent to guess.
 
 ### Spend fewer calls on plumbing
 
-The default MCP catalog exposes all 39 browser tools directly, with no discovery step required. Compact scans limit page output, and `chrome_cdp_batch` runs multiple CDP commands in one tool call. Optional smaller catalogs trade extra discovery calls for a smaller initial tool-definition context.
+The CLI makes direct local JSON requests without MCP initialization or a tool-catalog preload. Named sessions survive separate CLI processes, and `act` runs an ordered action sequence, checks an explicit postcondition, and returns a fresh scan in one command. The short Skill teaches reference lifetimes and failure handling; advanced schemas are loaded only when needed.
+
+MCP still exposes all 39 browser tools. Both entrypoints reuse the same browser execution layer. Fewer agent-side round trips and tool definitions do not imply that every cold Node CLI launch is faster than a warm MCP call.
 
 ## What agents can do
 
@@ -44,18 +46,27 @@ The default MCP catalog exposes all 39 browser tools directly, with no discovery
 ## How it works
 
 ```text
-MCP client -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser extension -> your Chrome profile
+CLI / MCP client -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser extension -> your Chrome profile
 ```
 
-The extension starts the local bridge through Native Messaging. MCP clients connect through Streamable HTTP, or through the supplied STDIO proxy. Both routes operate the same browser; the STDIO proxy does not launch a separate Chrome instance.
+The extension starts the local bridge through Native Messaging. CLI requests go directly to `/browser`, with task state held in that existing bridge, not another daemon. MCP clients use Streamable HTTP or the supplied STDIO proxy. All entrypoints operate the same browser.
 
 ## Getting started
 
-The [installation and configuration guide](README_zh.md#安装) covers source builds, extension loading, Native Host registration, Codex setup, tool catalogs, and connection checks.
+The [installation and configuration guide](README_zh.md#安装) covers source builds, extension loading, Native Host registration, CLI linking, Skill installation, and MCP setup. The canonical Skill is [`.agents/skills/aieasybrowser/SKILL.md`](.agents/skills/aieasybrowser/SKILL.md); it can be linked into user Skill directories without maintaining duplicate instructions.
 
+- Default CLI endpoint: `http://127.0.0.1:12307/browser` (loopback only)
 - Default MCP endpoint: `http://127.0.0.1:12307/mcp?profile=full`
 - Native Messaging host: `com.aieasybrowser.nativehost`
 - Stable extension ID: `coleelkpegcobndoloaofalgnkhiamll`
+
+## CLI workflow
+
+Select a named task session, choose an actual tab from `tabs`, then `scan`. Use the returned handles with `click`, `fill`, or a short `act` batch, and supply a site-specific `--expect` for asynchronous effects. Actions/checks/rescans return one JSON result per command.
+
+New scans and actions expire previous handles. `STALE_REF` or `STALE_DOCUMENT` requires a new scan. On failure, inspect `phase`, `actionStatus`, and `completed`: an assertion or scan failure after completed actions is not a reason to replay them, and `unknown` means a sent action may have happened. No automatic action replay or state recovery is performed after a bridge restart.
+
+Exit codes are `0` success, `2` invalid arguments, `3` operation/timeout failure, `4` connection/protocol failure, and `130` cancellation. Discover advanced capabilities with `tools`, `describe`, and `call` instead of loading the entire catalog. See the [CLI operation guide](README_zh.md#cli--skill) for copyable commands and target rules.
 
 ## Security and limitations
 
