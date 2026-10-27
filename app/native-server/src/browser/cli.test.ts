@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import { Command } from 'commander';
+import { BRIDGE_ENV } from '../constant';
 import {
   browserExitCode,
   getBrowserEndpoint,
@@ -57,6 +58,18 @@ describe('browser CLI grammar and HTTP transport', () => {
   ])('rejects non-CLI URL %s before connecting', (url) => {
     expect(() => getBrowserEndpoint(url)).toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+  test('preserves a configured port error instead of disguising it as a --url error', () => {
+    const previous = process.env[BRIDGE_ENV.PORT];
+    try {
+      process.env[BRIDGE_ENV.PORT] = '123abc';
+      expect(() => getBrowserEndpoint()).toThrow('AIEASYBROWSER_PORT must be an integer');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(getBrowserEndpoint('http://127.0.0.1:12307')).toBe('http://127.0.0.1:12307/browser');
+    } finally {
+      if (previous === undefined) delete process.env[BRIDGE_ENV.PORT];
+      else process.env[BRIDGE_ENV.PORT] = previous;
+    }
   });
 
   test.each([
@@ -173,6 +186,8 @@ describe('browser CLI grammar and HTTP transport', () => {
     [false, 'INVALID_ARGUMENT', 2],
     [false, 'BROWSER_ERROR', 3],
     [false, 'CONNECTION_FAILED', 4],
+    [false, 'FORBIDDEN', 4],
+    [false, 'UNAUTHORIZED', 4],
     [false, 'CANCELLED', 130],
     [false, 'TIMEOUT', 3],
   ] as const)('maps result %s/%s to exit %s', (ok, code, expected) => {
@@ -207,6 +222,21 @@ describe('browser CLI grammar and HTTP transport', () => {
       error: { code: 'CONNECTION_FAILED' },
       actionStatus: 'unknown',
     });
+  });
+  test.each([
+    [401, 'UNAUTHORIZED'],
+    [403, 'FORBIDDEN'],
+  ])('preserves a local security failure from HTTP %s', async (status, code) => {
+    const failure = {
+      ok: false,
+      error: { code, message: 'Local bridge denied the request' },
+      actionStatus: 'not_started',
+    };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(failure), { status }));
+    const response = await requestBrowserCommand({ command: 'health' }, {});
+    expect(response).toEqual(failure);
+    expect(browserExitCode(response)).toBe(4);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
   test.each([{ ok: true }, { ok: false }, { unexpected: true }])(
     'rejects malformed success/status payload %j',

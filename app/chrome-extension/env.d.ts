@@ -1,5 +1,5 @@
 /// <reference types="unplugin-icons/types/vue" />
-declare const __MCP_HTTP_HOST__: string;
+declare const __BRIDGE_HTTP_HOST__: string;
 declare module '*.vue' {
   import type { DefineComponent } from 'vue';
   type Props = Record<string, never>;

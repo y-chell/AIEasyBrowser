@@ -1,163 +1,94 @@
-import { describe, expect, test, afterAll, beforeAll } from '@jest/globals';
-import supertest from 'supertest';
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import type { NativeMessagingHost } from '../native-messaging-host';
+import { BRIDGE_ENV } from '../constant';
 import { Server } from './index';
 
-describe('服务器测试', () => {
-  const server = new Server();
+const ORIGINAL_ENV = { ...process.env };
+let server: Server;
 
-  // 启动服务器测试实例
-  beforeAll(async () => {
-    await server.getInstance().ready();
-  });
-
-  // 关闭服务器
-  afterAll(async () => {
-    await server.getInstance().close();
-  });
-
-  test('GET /ping 应返回正确响应', async () => {
-    const response = await supertest(server.getInstance().server)
-      .get('/ping')
-      .expect(200)
-      .expect('Content-Type', /json/);
-
-    expect(response.body).toEqual({
-      status: 'ok',
-      message: 'pong',
-    });
-  });
-
-  test('MCP 路由应拒绝 Host 和 Origin 前缀绕过', async () => {
-    const invalidHost = await supertest(server.getInstance().server)
-      .post('/mcp')
-      .set('Host', 'localhost.evil.test')
-      .send({ jsonrpc: '2.0', id: 1, method: 'ping' })
-      .expect(403);
-    const invalidOrigin = await supertest(server.getInstance().server)
-      .post('/mcp')
-      .set('Origin', 'chrome-extension://hbdgbgagpkpjffpklnamcljpakneikee.evil')
-      .send({ jsonrpc: '2.0', id: 1, method: 'ping' })
-      .expect(403);
-
-    expect(invalidHost.body.error.message).toBe('Forbidden Host');
-    expect(invalidOrigin.body.error.message).toBe('Forbidden Origin');
-  });
-
-  test('POST /mcp 应区分非法、未知和缺失的 session ID', async () => {
-    await supertest(server.getInstance().server)
-      .post('/mcp')
-      .set('Mcp-Session-Id', 'contains whitespace')
-      .send(createInitializeRequest())
-      .expect(400);
-
-    await supertest(server.getInstance().server)
-      .post('/mcp')
-      .set('Mcp-Session-Id', 'unknown-session')
-      .send({ jsonrpc: '2.0', id: 2, method: 'ping' })
-      .expect(404);
-  });
-
-  test('POST /mcp initialize 应返回 session 并避免重复写响应', async () => {
-    const response = await supertest(server.getInstance().server)
-      .post('/mcp')
-      .set('Accept', 'application/json, text/event-stream')
-      .set('Content-Type', 'application/json')
-      .send(createInitializeRequest())
-      .expect(200)
-      .expect('Content-Type', /text\/event-stream/);
-
-    const sessionId = response.headers['mcp-session-id'];
-    expect(sessionId).toBeTruthy();
-    expect(response.text).toContain('event: message');
-    expect(response.text).toContain('"jsonrpc":"2.0"');
-    expect(response.text).toContain('"protocolVersion"');
-
-    await supertest(server.getInstance().server)
-      .delete('/mcp')
-      .set('Mcp-Session-Id', sessionId)
-      .expect(200);
-    await supertest(server.getInstance().server)
-      .post('/mcp')
-      .set('Mcp-Session-Id', sessionId)
-      .send({ jsonrpc: '2.0', id: 2, method: 'ping' })
-      .expect(404);
-  });
+beforeEach(() => {
+  for (const name of Object.values(BRIDGE_ENV)) delete process.env[name];
+  server = new Server();
+});
+afterEach(async () => {
+  await server.getInstance().close();
+  process.env = { ...ORIGINAL_ENV };
+  jest.restoreAllMocks();
 });
 
-test('非回环监听器应只向远程来源开放 MCP 传输路由', async () => {
-  const previousEnv = {
-    bindHost: process.env.CHROME_MCP_BIND_HOST,
-    authToken: process.env.CHROME_MCP_AUTH_TOKEN,
-    allowedHosts: process.env.CHROME_MCP_ALLOWED_HOSTS,
-  };
-  process.env.CHROME_MCP_BIND_HOST = '0.0.0.0';
-  process.env.CHROME_MCP_AUTH_TOKEN = '0123456789abcdef';
-  process.env.CHROME_MCP_ALLOWED_HOSTS = '192.0.2.10';
+describe('local browser bridge server', () => {
+  test('returns a local health response without a protocol handshake', async () => {
+    const response = await server.getInstance().inject({ method: 'GET', url: '/ping' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'ok', message: 'pong' });
+    expect(response.headers['mcp-session-id']).toBeUndefined();
+  });
 
-  let remoteServer: Server | undefined;
-  try {
-    remoteServer = new Server();
-    await remoteServer.getInstance().ready();
-
-    const nonMcpResponse = await remoteServer.getInstance().inject({
-      method: 'GET',
-      url: '/ping',
-      remoteAddress: '192.0.2.20',
+  test.each([
+    ['GET', '/mcp'],
+    ['POST', '/mcp?profile=full'],
+    ['DELETE', '/mcp'],
+    ['GET', '/sse'],
+    ['POST', '/messages?sessionId=old'],
+  ] as const)('does not expose the removed %s %s transport', async (method, url) => {
+    const response = await server.getInstance().inject({
+      method,
+      url,
+      headers: { 'mcp-session-id': 'old-session' },
+      ...(method === 'POST' ? { payload: { jsonrpc: '2.0', id: 1, method: 'initialize' } } : {}),
     });
-    expect(nonMcpResponse.statusCode).toBe(403);
-    expect(nonMcpResponse.json()).toEqual({
-      error: 'Non-MCP HTTP routes are only available from the local machine.',
-    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).not.toHaveProperty('jsonrpc');
+    expect(response.headers['mcp-session-id']).toBeUndefined();
+  });
 
-    const mcpResponse = await remoteServer.getInstance().inject({
-      method: 'POST',
-      url: '/mcp',
-      headers: {
-        host: '192.0.2.10:12306',
-        'content-type': 'application/json',
-      },
-      payload: { jsonrpc: '2.0', id: 1, method: 'ping' },
-      remoteAddress: '192.0.2.20',
-    });
-    expect(mcpResponse.statusCode).toBe(401);
-
-    const localResponse = await remoteServer.getInstance().inject({
-      method: 'GET',
-      url: '/ping',
-      remoteAddress: '127.0.0.1',
-    });
-    expect(localResponse.statusCode).toBe(200);
-  } finally {
-    if (remoteServer) {
-      await remoteServer.getInstance().close();
-    }
-    restoreEnv('CHROME_MCP_BIND_HOST', previousEnv.bindHost);
-    restoreEnv('CHROME_MCP_AUTH_TOKEN', previousEnv.authToken);
-    restoreEnv('CHROME_MCP_ALLOWED_HOSTS', previousEnv.allowedHosts);
-  }
-});
-
-function createInitializeRequest() {
-  return {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: LATEST_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: {
-        name: 'jest-client',
-        version: '1.0.0',
-      },
+  test.each(['/ping', '/ask-extension', '/browser', '/mcp'])(
+    'rejects a remote source for %s before any route executes',
+    async (url) => {
+      const response = await server.getInstance().inject({
+        method: url === '/browser' ? 'POST' : 'GET',
+        url,
+        remoteAddress: '192.0.2.20',
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({
+        ok: false,
+        error: { code: 'FORBIDDEN', message: 'Browser CLI is only available over loopback' },
+        actionStatus: 'not_started',
+      });
     },
-  };
-}
+  );
 
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-    return;
-  }
-  process.env[name] = value;
-}
+  test.each(['0.0.0.0', '192.0.2.10', '::', 'remote.test', 'localhost:12307'])(
+    'rejects a non-loopback or port-bearing listener %s',
+    (host) => {
+      process.env[BRIDGE_ENV.HOST] = host;
+      expect(() => new Server()).toThrow('AIEASYBROWSER_HOST');
+    },
+  );
+
+  test('starts on loopback, records the actual port, and stops without session cleanup', async () => {
+    const host = {} as NativeMessagingHost;
+    await server.start(0, host);
+    expect(server.isRunning).toBe(true);
+    const port = Number(process.env[BRIDGE_ENV.PORT]);
+    expect(port).toBeGreaterThan(0);
+    const response = await fetch(`http://127.0.0.1:${port}/ping`);
+    expect(await response.json()).toEqual({ status: 'ok', message: 'pong' });
+    await server.start(port, host);
+    await server.stop();
+    expect(server.isRunning).toBe(false);
+    await server.stop();
+  });
+
+  test('does not report a failed listen as running or change the configured port', async () => {
+    const listen = jest
+      .spyOn(server.getInstance(), 'listen')
+      .mockRejectedValue(new Error('EADDRINUSE fixture'));
+    process.env[BRIDGE_ENV.PORT] = '4321';
+    await expect(server.start(4321, {} as NativeMessagingHost)).rejects.toThrow('EADDRINUSE');
+    expect(server.isRunning).toBe(false);
+    expect(process.env[BRIDGE_ENV.PORT]).toBe('4321');
+    expect(listen).toHaveBeenCalledWith({ port: 4321, host: '127.0.0.1' });
+  });
+});

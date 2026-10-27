@@ -39,6 +39,13 @@ describe('native build output cleanup', () => {
     expect(fs.rmSync).not.toHaveBeenCalledWith(distDir, expect.anything());
     expect(execSync).toHaveBeenCalledWith('tsc', { stdio: 'inherit' });
     expect(writeNodePathFile).toHaveBeenCalledWith(distDir, process.execPath);
+    expect(
+      jest
+        .mocked(fs.copyFileSync)
+        .mock.calls.some(([source, target]) =>
+          [source, target].some((file) => String(file).endsWith('stdio-config.json')),
+        ),
+    ).toBe(false);
   });
 
   test('builds into an empty or newly created output directory', () => {

@@ -26,25 +26,6 @@ console.log('dist 和 dist/logs 目录已创建/确认存在');
 console.log('编译TypeScript...');
 execSync('tsc', { stdio: 'inherit' });
 
-// 复制配置文件
-console.log('复制配置文件...');
-const configSourcePath = path.join(__dirname, '..', 'mcp', 'stdio-config.json');
-const configDestPath = path.join(distDir, 'mcp', 'stdio-config.json');
-
-try {
-  // 确保目标目录存在
-  fs.mkdirSync(path.dirname(configDestPath), { recursive: true });
-
-  if (fs.existsSync(configSourcePath)) {
-    fs.copyFileSync(configSourcePath, configDestPath);
-    console.log(`已将 stdio-config.json 复制到 ${configDestPath}`);
-  } else {
-    console.error(`错误: 配置文件未找到: ${configSourcePath}`);
-  }
-} catch (error) {
-  console.error('复制配置文件时出错:', error);
-}
-
 // 复制package.json并更新其内容
 console.log('准备package.json...');
 const packageJson = require('../../package.json');
@@ -54,7 +35,7 @@ const readmeContent = `# ${packageJson.name}
 
 这是由 AIEasyBrowser 源码构建生成的 Chrome Native Messaging host。
 
-安装、注册、MCP 连接和验证步骤见项目主手册 [README_zh.md](../../../README_zh.md)。
+安装、注册、CLI + Skill 和验证步骤见项目主手册 [README_zh.md](../../../README_zh.md)。
 此目录不是已发布的 npm 包，不需要全局安装。
 
 扩展会自动启动本程序。Native Messaging host 仅注册到当前用户，不使用系统级安装或自动提权。

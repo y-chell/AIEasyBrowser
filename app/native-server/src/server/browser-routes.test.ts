@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { BRIDGE_ENV } from '../constant';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { Server } from './index';
 
@@ -9,13 +10,11 @@ const success = (data: unknown) => ({
   data: { content: [], structuredContent: data },
 });
 const previousEnv = {
-  token: process.env.CHROME_MCP_AUTH_TOKEN,
-  legacy: process.env.MCP_HTTP_AUTH_TOKEN,
+  token: process.env[BRIDGE_ENV.AUTH_TOKEN],
 };
 
 beforeEach(() => {
-  delete process.env.CHROME_MCP_AUTH_TOKEN;
-  delete process.env.MCP_HTTP_AUTH_TOKEN;
+  delete process.env[BRIDGE_ENV.AUTH_TOKEN];
   send = jest.fn(async (payload) => {
     if (payload.name === 'get_windows_and_tabs')
       return success({ windows: [{ id: 1, tabs: [{ id: 7 }] }] });
@@ -32,8 +31,7 @@ beforeEach(() => {
 afterEach(async () => {
   await server.getInstance().close();
   for (const [key, value] of Object.entries({
-    CHROME_MCP_AUTH_TOKEN: previousEnv.token,
-    MCP_HTTP_AUTH_TOKEN: previousEnv.legacy,
+    [BRIDGE_ENV.AUTH_TOKEN]: previousEnv.token,
   })) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -67,6 +65,25 @@ describe('direct browser HTTP route', () => {
     });
     expect(response.headers['mcp-session-id']).toBeUndefined();
   });
+  test('rejects a JSON-RPC handshake without creating a session or calling Chrome', async () => {
+    const response = await post({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { capabilities: {}, clientInfo: { name: 'fixture', version: '1' } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT' },
+      actionStatus: 'not_started',
+    });
+    expect(response.json()).not.toHaveProperty('jsonrpc');
+    expect(response.headers['mcp-session-id']).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+    const sessions = await post({ command: 'session', mode: 'list' });
+    expect(sessions.json().result).toEqual([]);
+  });
   test.each([
     [{ host: 'localhost.evil.test' }, '127.0.0.1', 'Forbidden Host'],
     [{ origin: 'https://fixture.test' }, '127.0.0.1', 'Forbidden Origin'],
@@ -79,11 +96,17 @@ describe('direct browser HTTP route', () => {
   });
   test('checks the configured bearer token for local CLI requests', async () => {
     await server.getInstance().close();
-    process.env.CHROME_MCP_AUTH_TOKEN = 'fixture-local-token';
+    process.env[BRIDGE_ENV.AUTH_TOKEN] = 'fixture-local-token';
     server = new Server();
     server.setNativeHost({ sendRequestToExtensionAndWait: send } as unknown as NativeMessagingHost);
     const rejected = await post({ command: 'health' });
     expect(rejected.statusCode).toBe(401);
+    expect(rejected.json()).toMatchObject({
+      ok: false,
+      error: { code: 'UNAUTHORIZED', message: 'Unauthorized' },
+      actionStatus: 'not_started',
+    });
+    expect(rejected.json()).not.toHaveProperty('jsonrpc');
     expect(send).not.toHaveBeenCalled();
     const accepted = await post(
       { command: 'health' },

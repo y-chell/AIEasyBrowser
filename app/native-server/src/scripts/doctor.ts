@@ -24,9 +24,9 @@ import {
   tryRegisterUserLevelHost,
   getLogDir,
 } from './utils';
-import { NATIVE_SERVER_PORT } from '../constant';
+import { getBridgeBaseUrl, getBridgeHost, getBridgePort, NATIVE_SERVER_PORT } from '../constant';
+import { parseHttpSecurityConfig } from '../server/http-security';
 
-const EXPECTED_PORT = NATIVE_SERVER_PORT;
 const SCHEMA_VERSION = 1;
 const MIN_NODE_MAJOR_VERSION = 20;
 
@@ -142,7 +142,7 @@ function resolveDistDir(): string {
 
   const looksLikeDist = (dir: string): boolean => {
     return (
-      fs.existsSync(path.join(dir, 'mcp', 'stdio-config.json')) ||
+      fs.existsSync(path.join(dir, 'index.js')) ||
       fs.existsSync(path.join(dir, 'run_host.sh')) ||
       fs.existsSync(path.join(dir, 'run_host.bat'))
     );
@@ -307,8 +307,8 @@ export function resolveNodeCandidate(distDir: string): NodeResolutionResult {
     return null;
   };
 
-  // Priority 0: CHROME_MCP_NODE_PATH
-  const fromEnv = consider('CHROME_MCP_NODE_PATH', process.env.CHROME_MCP_NODE_PATH);
+  // Priority 0: AIEASYBROWSER_NODE_PATH
+  const fromEnv = consider('AIEASYBROWSER_NODE_PATH', process.env.AIEASYBROWSER_NODE_PATH);
   if (fromEnv) {
     return { ...fromEnv, nodePathFile };
   }
@@ -582,7 +582,14 @@ async function checkConnectivity(
 
   try {
     const res = await fetchFn(url, { method: 'GET', signal: controller.signal });
-    return { ok: res.ok, status: res.status };
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    const body = (await res.json()) as { status?: unknown; message?: unknown } | null;
+    const ok = body?.status === 'ok' && body.message === 'pong';
+    return {
+      ok,
+      status: res.status,
+      ...(ok ? {} : { error: 'Unexpected response from bridge /ping' }),
+    };
   } catch (e: unknown) {
     const errMessage = e instanceof Error ? e.message : String(e);
     const errName = e instanceof Error ? e.name : '';
@@ -640,7 +647,6 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const wrapperPath = path.resolve(distDir, wrapperScriptName);
   const nodeScriptPath = path.resolve(distDir, 'index.js');
   const logDir = getLogDir();
-  const stdioConfigPath = path.resolve(distDir, 'mcp', 'stdio-config.json');
 
   // Run fixes if requested
   const fixes = await attemptFixes(
@@ -652,6 +658,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
 
   const checks: DoctorCheckResult[] = [];
   const nextSteps: string[] = [];
+  let expectedPort = NATIVE_SERVER_PORT;
 
   // Check 1: Installation info
   checks.push({
@@ -671,7 +678,6 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const missingHostFiles: string[] = [];
   if (!fs.existsSync(wrapperPath)) missingHostFiles.push(wrapperPath);
   if (!fs.existsSync(nodeScriptPath)) missingHostFiles.push(nodeScriptPath);
-  if (!fs.existsSync(stdioConfigPath)) missingHostFiles.push(stdioConfigPath);
 
   if (missingHostFiles.length > 0) {
     checks.push({
@@ -690,7 +696,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       title: 'Host files',
       status: 'ok',
       message: `Wrapper: ${wrapperPath}`,
-      details: { wrapperPath, nodeScriptPath, stdioConfigPath },
+      details: { wrapperPath, nodeScriptPath },
     });
   }
 
@@ -741,7 +747,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const nodePathWarn =
     Boolean(nodeResolution.nodePath) &&
     (!nodeResolution.nodePathFile.exists || nodeResolution.nodePathFile.valid === false) &&
-    !process.env.CHROME_MCP_NODE_PATH;
+    !process.env.AIEASYBROWSER_NODE_PATH;
 
   // Determine node check status: error if not found or version too old, warn if path issue
   let nodeStatus: DoctorStatus = 'ok';
@@ -771,7 +777,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
     nodeMessage = `Using ${nodeResolution.source}: ${nodeResolution.nodePath}${nodeResolution.version ? ` (${nodeResolution.version})` : ''}`;
     nodeFix = [
       `${COMMAND_NAME} doctor --fix`,
-      `Or set CHROME_MCP_NODE_PATH to an absolute node path`,
+      `Or set AIEASYBROWSER_NODE_PATH to an absolute node path`,
     ];
   } else {
     nodeStatus = 'ok';
@@ -956,69 +962,50 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
     }
   }
 
-  // Check 7: Port configuration
-  if (fs.existsSync(stdioConfigPath)) {
-    const cfg = readJsonFile(stdioConfigPath);
-    if (!cfg.ok) {
-      checks.push({
-        id: 'port.config',
-        title: 'Port config',
-        status: 'error',
-        message: `Failed to parse stdio-config.json: ${cfg.error}`,
-      });
-    } else {
-      try {
-        const configValue = cfg.value as Record<string, unknown>;
-        const url = new URL(configValue.url as string);
-        const port = Number(url.port);
-        const portOk = port === EXPECTED_PORT;
-        checks.push({
-          id: 'port.config',
-          title: 'Port config',
-          status: portOk ? 'ok' : 'error',
-          message: configValue.url as string,
-          details: {
-            expectedPort: EXPECTED_PORT,
-            actualPort: port,
-            fix: portOk ? undefined : [`${COMMAND_NAME} update-port ${EXPECTED_PORT}`],
-          },
-        });
-        if (!portOk) nextSteps.push(`${COMMAND_NAME} update-port ${EXPECTED_PORT}`);
-
-        // Check constant consistency
-        const nativePortOk = NATIVE_SERVER_PORT === EXPECTED_PORT;
-        checks.push({
-          id: 'port.constant',
-          title: 'Port constant',
-          status: nativePortOk ? 'ok' : 'warn',
-          message: `NATIVE_SERVER_PORT=${NATIVE_SERVER_PORT}`,
-          details: { expectedPort: EXPECTED_PORT },
-        });
-
-        // Connectivity check
-        const pingUrl = new URL('/ping', url);
-        const ping = await checkConnectivity(pingUrl.toString(), 1500);
-        checks.push({
-          id: 'connectivity',
-          title: 'Connectivity',
-          status: ping.ok ? 'ok' : 'warn',
-          message: ping.ok
-            ? `GET ${pingUrl} -> ${ping.status}`
-            : `GET ${pingUrl} failed (${ping.error || 'unknown error'})`,
-          details: {
-            hint: 'If the server is not running, click "Connect" in the extension and retry.',
-          },
-        });
-        if (!ping.ok) nextSteps.push('Click "Connect" in the extension, then re-run doctor');
-      } catch (e) {
-        checks.push({
-          id: 'port.config',
-          title: 'Port config',
-          status: 'error',
-          message: `Invalid URL in stdio-config.json: ${stringifyError(e)}`,
-        });
-      }
-    }
+  // Check 7: Local bridge configuration and connectivity
+  let bridgeUrl: string | undefined;
+  try {
+    const security = parseHttpSecurityConfig({ listenHost: getBridgeHost() });
+    expectedPort = getBridgePort();
+    bridgeUrl = getBridgeBaseUrl();
+    checks.push({
+      id: 'bridge.config',
+      title: 'Bridge config',
+      status: 'ok',
+      message: bridgeUrl,
+      details: {
+        host: security.listenHost,
+        port: expectedPort,
+        authenticated: Boolean(security.authToken),
+      },
+    });
+  } catch (error) {
+    checks.push({
+      id: 'bridge.config',
+      title: 'Bridge config',
+      status: 'error',
+      message: stringifyError(error),
+    });
+    nextSteps.push(
+      'Correct the AIEASYBROWSER_HOST, AIEASYBROWSER_PORT or AIEASYBROWSER_AUTH_TOKEN configuration',
+    );
+  }
+  if (bridgeUrl) {
+    const pingUrl = new URL('/ping', bridgeUrl).href;
+    const ping = await checkConnectivity(pingUrl, 1500);
+    checks.push({
+      id: 'connectivity',
+      title: 'Connectivity',
+      status: ping.ok ? 'ok' : 'warn',
+      message: ping.ok
+        ? `GET ${pingUrl} -> ${ping.status}`
+        : `GET ${pingUrl} failed (${ping.error || 'unknown error'})`,
+      details: {
+        hint: 'Enable or reload the extension in chrome://extensions; it connects automatically.',
+      },
+    });
+    if (!ping.ok)
+      nextSteps.push('Enable or reload AIEasyBrowser in chrome://extensions, then re-run doctor');
   }
 
   // Check 8: Logs directory
@@ -1047,7 +1034,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       node: { version: process.version, execPath: process.execPath },
       package: { name: packageName, version: packageVersion, rootDir, distDir },
       command: { canonical: commandInfo.canonical, aliases: commandInfo.aliases },
-      nativeHost: { hostName: HOST_NAME, expectedPort: EXPECTED_PORT },
+      nativeHost: { hostName: HOST_NAME, expectedPort },
     },
     fixes,
     checks,

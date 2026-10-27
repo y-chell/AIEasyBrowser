@@ -1,5 +1,5 @@
 /**
- * Per-tool timeout budget for browser tool calls forwarded to the extension.
+ * Native Messaging timeout budget for browser calls forwarded to the extension.
  *
  * A single 120s timeout meant that when the extension service worker died or a page hung,
  * the agent waited two minutes before learning anything. Interactive tools normally finish

@@ -12,7 +12,7 @@ export const NATIVE_HOST = {
 } as const;
 
 const LOCAL_SERVER_HOST = (() => {
-  const raw = typeof __MCP_HTTP_HOST__ === 'string' ? __MCP_HTTP_HOST__.trim() : '';
+  const raw = typeof __BRIDGE_HTTP_HOST__ === 'string' ? __BRIDGE_HTTP_HOST__.trim() : '';
   const sanitized = raw.replace(/^https?:\/\//, '').replace(/\/+$/, '');
   return sanitized || '127.0.0.1';
 })();
@@ -23,11 +23,9 @@ export const LOCAL_SERVER = {
 } as const;
 
 export function getLocalServerBaseUrl(port: number | string): string {
-  return `${LOCAL_SERVER.PROTOCOL}://${LOCAL_SERVER.HOST}:${String(port)}`;
-}
-
-export function getLocalMcpUrl(port: number | string = NATIVE_HOST.DEFAULT_PORT): string {
-  return `${getLocalServerBaseUrl(port)}/mcp`;
+  const host = LOCAL_SERVER.HOST;
+  const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `${LOCAL_SERVER.PROTOCOL}://${urlHost}:${String(port)}`;
 }
 
 // Chrome Extension Icons

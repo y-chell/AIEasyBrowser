@@ -36,7 +36,7 @@ function runHost(input = Buffer.alloc(0), exitCode = 0) {
   env.PATH = '';
   env.AIEASYBROWSER_HOST_WRAPPER = path.join(hostDir, 'run_host.bat');
   env.AIEASYBROWSER_FIXTURE_EXIT_CODE = String(exitCode);
-  env.CHROME_MCP_NODE_PATH = path.join(fixtureRoot, 'unrelated-node.exe');
+  env.AIEASYBROWSER_NODE_PATH = path.join(fixtureRoot, 'unrelated-node.exe');
   const child = spawnSync(
     process.env.ComSpec ||
       path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'),

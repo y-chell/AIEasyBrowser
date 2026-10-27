@@ -10,7 +10,7 @@ config({ path: resolve(process.cwd(), '.env.local') });
 
 const WXT_OUT_DIR = process.env.WXT_OUT_DIR?.trim();
 const STATIC_ASSET_DIRS = ['inject-scripts', '_locales'] as const;
-const MCP_HTTP_HOST = (process.env.CHROME_MCP_HOST || process.env.MCP_HTTP_HOST || '127.0.0.1')
+const BRIDGE_HTTP_HOST = (process.env.AIEASYBROWSER_HOST || '127.0.0.1')
   .trim()
   .replace(/^https?:\/\//, '')
   .replace(/\/+$/, '');
@@ -112,7 +112,7 @@ export default defineConfig({
   },
   vite: (env) => ({
     define: {
-      __MCP_HTTP_HOST__: JSON.stringify(MCP_HTTP_HOST || '127.0.0.1'),
+      __BRIDGE_HTTP_HOST__: JSON.stringify(BRIDGE_HTTP_HOST || '127.0.0.1'),
     },
     plugins: [
       // Production assets use WXT's public-asset hook above. A second copy during

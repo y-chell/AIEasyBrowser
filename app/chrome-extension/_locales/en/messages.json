@@ -85,10 +85,6 @@
     "message": "Connected, Service Not Started",
     "description": "Connected but service not started status"
   },
-  "mcpServerConfigLabel": {
-    "message": "MCP Server Configuration",
-    "description": "MCP server configuration section label"
-  },
   "connectionPortLabel": {
     "message": "Connection Port",
     "description": "Connection port input label"

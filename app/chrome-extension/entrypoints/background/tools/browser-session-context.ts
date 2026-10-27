@@ -16,394 +16,14 @@ export interface BrowserToolExecutionContext {
   strictTarget?: boolean;
 }
 
-interface BrowserSessionBinding {
-  tabId?: number;
-  windowId?: number;
-  updatedAt: number;
-  source?: string;
-}
-
-interface PreparedToolCall {
-  args: any;
-  initialTarget?: BrowserSessionBinding;
-  bindingBeforeCall?: BrowserSessionBinding;
-}
-
-const sessionBindings = new Map<string, BrowserSessionBinding>();
 const isolationQueues = new Map<string, Promise<void>>();
-
-const NAVIGATE_TOOL = 'chrome_navigate';
-const CLOSE_TABS_TOOL = 'chrome_close_tabs';
-const SWITCH_TAB_TOOL = 'chrome_switch_tab';
-
-const SESSION_AWARE_TOOLS = new Set([
-  NAVIGATE_TOOL,
-  CLOSE_TABS_TOOL,
-  SWITCH_TAB_TOOL,
-  'chrome_list_frames',
-  'chrome_read_page',
-  'chrome_query_elements',
-  'chrome_get_element_html',
-  'chrome_computer',
-  'chrome_click_element',
-  'chrome_fill_or_select',
-  'chrome_keyboard',
-  'chrome_screenshot',
-  'chrome_console',
-  'chrome_collect_debug_evidence',
-  'chrome_javascript',
-  'chrome_get_web_content',
-  'chrome_upload_file',
-  'chrome_get_upload_status',
-  'chrome_wait_for',
-  'chrome_assert',
-  'chrome_inject_script',
-  'chrome_send_command_to_inject_script',
-]);
-
-const PIN_INITIAL_ACTIVE_TOOLS = new Set([
-  'chrome_list_frames',
-  'chrome_read_page',
-  'chrome_query_elements',
-  'chrome_get_element_html',
-  'chrome_computer',
-  'chrome_click_element',
-  'chrome_fill_or_select',
-  'chrome_keyboard',
-  'chrome_screenshot',
-  'chrome_console',
-  'chrome_collect_debug_evidence',
-  'chrome_javascript',
-  'chrome_get_web_content',
-  'chrome_upload_file',
-  'chrome_get_upload_status',
-  'chrome_wait_for',
-  'chrome_assert',
-  'chrome_inject_script',
-  'chrome_send_command_to_inject_script',
-]);
-
-function normalizeSessionId(context?: BrowserToolCallContext): string | undefined {
-  const raw = context?.sessionId;
-  if (typeof raw !== 'string') return undefined;
-  const value = raw.trim();
-  return value || undefined;
-}
 
 function isPlainObject(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return value;
-}
-
-async function getTab(tabId?: number): Promise<chrome.tabs.Tab | null> {
-  if (typeof tabId !== 'number') return null;
-  try {
-    return await chrome.tabs.get(tabId);
-  } catch {
-    return null;
-  }
-}
-
-async function getWindow(windowId?: number): Promise<chrome.windows.Window | null> {
-  if (typeof windowId !== 'number' || !chrome.windows?.get) return null;
-  try {
-    return await chrome.windows.get(windowId, { populate: false });
-  } catch {
-    return null;
-  }
-}
-
-async function getActiveTab(windowId?: number): Promise<chrome.tabs.Tab | null> {
-  try {
-    if (typeof windowId === 'number') {
-      const tabs = await chrome.tabs.query({ active: true, windowId });
-      return tabs[0] || null;
-    }
-
-    const currentWindowTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (currentWindowTabs[0]) return currentWindowTabs[0];
-
-    if (chrome.windows?.getLastFocused) {
-      const focusedWindow = await chrome.windows.getLastFocused({ populate: false });
-      if (typeof focusedWindow?.id === 'number') {
-        const tabs = await chrome.tabs.query({ active: true, windowId: focusedWindow.id });
-        if (tabs[0]) return tabs[0];
-      }
-    }
-
-    const activeTabs = await chrome.tabs.query({ active: true });
-    return activeTabs[0] || null;
-  } catch {
-    return null;
-  }
-}
-
-async function validateBinding(
-  binding?: BrowserSessionBinding,
-): Promise<BrowserSessionBinding | null> {
-  if (!binding) return null;
-
-  const tab = await getTab(binding.tabId);
-  if (tab?.id) {
-    return {
-      tabId: tab.id,
-      windowId: tab.windowId,
-      updatedAt: binding.updatedAt,
-      source: binding.source,
-    };
-  }
-
-  const window = await getWindow(binding.windowId);
-  if (window?.id) {
-    return {
-      windowId: window.id,
-      updatedAt: binding.updatedAt,
-      source: binding.source,
-    };
-  }
-
-  return null;
-}
-
-async function rememberSessionTarget(
-  sessionId: string,
-  target: Partial<BrowserSessionBinding>,
-  source: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const tab = await getTab(target.tabId);
-  throwIfAborted(signal);
-  if (tab?.id) {
-    sessionBindings.set(sessionId, {
-      tabId: tab.id,
-      windowId: tab.windowId,
-      updatedAt: Date.now(),
-      source,
-    });
-    return;
-  }
-
-  const window = await getWindow(target.windowId);
-  throwIfAborted(signal);
-  if (window?.id) {
-    sessionBindings.set(sessionId, {
-      windowId: window.id,
-      updatedAt: Date.now(),
-      source,
-    });
-  }
-}
-
-function shouldPinInitialActiveTab(toolName: string, args: Record<string, any>): boolean {
-  if (!PIN_INITIAL_ACTIVE_TOOLS.has(toolName)) return false;
-  if (typeof args.url === 'string' && args.url.trim()) return false;
-  return true;
-}
-
-async function getStoredBinding(
-  sessionId: string,
-  signal?: AbortSignal,
-): Promise<BrowserSessionBinding | null> {
-  const existing = await validateBinding(sessionBindings.get(sessionId));
-  throwIfAborted(signal);
-  if (!existing) {
-    sessionBindings.delete(sessionId);
-    return null;
-  }
-  sessionBindings.set(sessionId, existing);
-  return existing;
-}
-
-async function prepareToolArgs(
-  toolName: string,
-  rawArgs: any,
-  context?: BrowserToolCallContext,
-  signal?: AbortSignal,
-): Promise<PreparedToolCall> {
-  const args = isPlainObject(rawArgs) ? { ...rawArgs } : {};
-  // CLI workflows own their target in the bridge; do not resolve a second implicit target.
-  if (context?.transport === 'cli') return { args };
-  const sessionId = normalizeSessionId(context);
-  if (!sessionId || !SESSION_AWARE_TOOLS.has(toolName)) {
-    return { args };
-  }
-
-  const explicitTabId = asFiniteNumber(args.tabId);
-  const explicitWindowId = asFiniteNumber(args.windowId);
-
-  if (typeof explicitTabId === 'number') {
-    await rememberSessionTarget(sessionId, { tabId: explicitTabId }, 'explicit-tab', signal);
-    return { args, bindingBeforeCall: sessionBindings.get(sessionId) };
-  }
-
-  if (typeof explicitWindowId === 'number') {
-    await rememberSessionTarget(
-      sessionId,
-      { windowId: explicitWindowId },
-      'explicit-window',
-      signal,
-    );
-    return { args, bindingBeforeCall: sessionBindings.get(sessionId) };
-  }
-
-  const binding = await getStoredBinding(sessionId, signal);
-
-  if (toolName === CLOSE_TABS_TOOL) {
-    if (!args.tabIds && !args.url && typeof binding?.tabId === 'number') {
-      args.tabIds = [binding.tabId];
-    }
-    return { args, bindingBeforeCall: binding || undefined };
-  }
-
-  if (toolName === SWITCH_TAB_TOOL) {
-    return { args, bindingBeforeCall: binding || undefined };
-  }
-
-  if (binding?.tabId) {
-    args.tabId = binding.tabId;
-    return { args, bindingBeforeCall: binding };
-  }
-
-  if (binding?.windowId) {
-    args.windowId = binding.windowId;
-    return { args, bindingBeforeCall: binding };
-  }
-
-  if (toolName !== NAVIGATE_TOOL && shouldPinInitialActiveTab(toolName, args)) {
-    const activeTab = await getActiveTab();
-    if (activeTab?.id) {
-      args.tabId = activeTab.id;
-      return {
-        args,
-        initialTarget: {
-          tabId: activeTab.id,
-          windowId: activeTab.windowId,
-          updatedAt: Date.now(),
-          source: 'initial-active-tab',
-        },
-      };
-    }
-  }
-
-  return { args };
-}
-
-function parseJsonPayload(result: ToolResult): Record<string, unknown> | null {
-  if (isPlainObject(result.structuredContent)) return result.structuredContent;
-
-  for (const item of result.content || []) {
-    if (item.type !== 'text') continue;
-    const text = item.text?.trim();
-    if (!text || (!text.startsWith('{') && !text.startsWith('['))) continue;
-    try {
-      const parsed = JSON.parse(text);
-      return isPlainObject(parsed) ? parsed : null;
-    } catch {
-      // Not every text response is JSON.
-    }
-  }
-  return null;
-}
-
-function extractTargetFromPayload(
-  payload: Record<string, any> | null,
-): Partial<BrowserSessionBinding> | null {
-  if (!payload) return null;
-
-  const activeContext = isPlainObject(payload.activeContextAfterClose)
-    ? payload.activeContextAfterClose
-    : null;
-  if (activeContext) {
-    return {
-      tabId: asFiniteNumber(activeContext.tabId),
-      windowId: asFiniteNumber(activeContext.windowId),
-    };
-  }
-
-  const tabId = asFiniteNumber(payload.tabId);
-  const windowId = asFiniteNumber(payload.windowId);
-  if (typeof tabId === 'number' || typeof windowId === 'number') {
-    return { tabId, windowId };
-  }
-
-  if (Array.isArray(payload.tabs)) {
-    const tab = payload.tabs.find(
-      (item: unknown) => isPlainObject(item) && typeof item.tabId === 'number',
-    );
-    if (isPlainObject(tab)) {
-      return {
-        tabId: asFiniteNumber(tab.tabId),
-        windowId: asFiniteNumber(tab.windowId) ?? windowId,
-      };
-    }
-  }
-
-  return null;
-}
-
-async function finalizeToolCall(
-  sessionId: string | undefined,
-  toolName: string,
-  prepared: PreparedToolCall,
-  result: ToolResult,
-  signal?: AbortSignal,
-): Promise<void> {
-  if (!sessionId || !SESSION_AWARE_TOOLS.has(toolName)) return;
-
-  const payload = parseJsonPayload(result);
-  const closedTabIds = Array.isArray(payload?.closedTabIds)
-    ? payload.closedTabIds.filter((id: unknown): id is number => typeof id === 'number')
-    : [];
-  const bindingBeforeCall = prepared.bindingBeforeCall || sessionBindings.get(sessionId);
-
-  if (
-    toolName === CLOSE_TABS_TOOL &&
-    typeof bindingBeforeCall?.tabId === 'number' &&
-    closedTabIds.includes(bindingBeforeCall.tabId)
-  ) {
-    const target = extractTargetFromPayload(payload);
-    if (target?.tabId || target?.windowId) {
-      await rememberSessionTarget(sessionId, target, 'close-tabs-result', signal);
-    } else {
-      sessionBindings.delete(sessionId);
-    }
-    return;
-  }
-
-  if (result.isError) return;
-
-  const target = extractTargetFromPayload(payload);
-  if (
-    typeof target?.tabId === 'number' &&
-    target.tabId === bindingBeforeCall?.tabId &&
-    sessionBindings.has(sessionId)
-  ) {
-    // Same tab as the validated pre-call binding; tabs.onRemoved clears it if it goes away.
-    sessionBindings.set(sessionId, {
-      tabId: target.tabId,
-      windowId: target.windowId ?? bindingBeforeCall.windowId,
-      updatedAt: Date.now(),
-      source: 'tool-result',
-    });
-    return;
-  }
-  if (target?.tabId || target?.windowId) {
-    await rememberSessionTarget(sessionId, target, 'tool-result', signal);
-    return;
-  }
-
-  if (prepared.initialTarget?.tabId || prepared.initialTarget?.windowId) {
-    await rememberSessionTarget(
-      sessionId,
-      prepared.initialTarget,
-      'initial-target-success',
-      signal,
-    );
-  }
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -418,10 +38,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 async function waitForCompletion<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return pending;
-  }
-
+  if (!signal) return pending;
   return new Promise<T>((resolve, reject) => {
     const cleanup = () => signal.removeEventListener('abort', onAbort);
     const onAbort = () => {
@@ -451,13 +68,9 @@ async function enqueue<T>(key: string, fn: () => Promise<T>, signal?: AbortSigna
   });
   const current = previous.catch(() => undefined).then(() => gate);
   isolationQueues.set(key, current);
-
   void current.finally(() => {
-    if (isolationQueues.get(key) === current) {
-      isolationQueues.delete(key);
-    }
+    if (isolationQueues.get(key) === current) isolationQueues.delete(key);
   });
-
   try {
     await waitForCompletion(
       previous.catch(() => undefined),
@@ -476,8 +89,6 @@ async function withQueues<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const uniqueKeys = Array.from(new Set(keys)).sort();
-  if (uniqueKeys.length === 0) return fn();
-
   let run = fn;
   for (const key of uniqueKeys.reverse()) {
     const next = run;
@@ -486,55 +97,45 @@ async function withQueues<T>(
   return run();
 }
 
-function getTargetQueueKeys(args: any): string[] {
-  if (!isPlainObject(args)) return [];
-
+function getTargetQueueKeys(args: Record<string, any>): string[] {
   const keys: string[] = [];
   const tabId = asFiniteNumber(args.tabId);
-  if (typeof tabId === 'number') keys.push(`tab:${tabId}`);
-
+  if (tabId !== undefined) keys.push(`tab:${tabId}`);
   if (Array.isArray(args.tabIds)) {
     for (const id of args.tabIds) {
       const value = asFiniteNumber(id);
-      if (typeof value === 'number') keys.push(`tab:${value}`);
+      if (value !== undefined) keys.push(`tab:${value}`);
     }
   }
-
   const windowId = asFiniteNumber(args.windowId);
-  if (typeof windowId === 'number') keys.push(`window:${windowId}`);
-
+  if (windowId !== undefined) keys.push(`window:${windowId}`);
   return keys;
 }
 
 export async function runBrowserToolCallWithIsolation(
-  toolName: string,
   rawArgs: any,
   context: BrowserToolCallContext | undefined,
-  execute: (
-    preparedArgs: any,
-    executionContext?: BrowserToolExecutionContext,
-  ) => Promise<ToolResult>,
+  execute: (args: any, executionContext?: BrowserToolExecutionContext) => Promise<ToolResult>,
   executionContext?: BrowserToolExecutionContext,
 ): Promise<ToolResult> {
   const signal = executionContext?.signal;
-  const sessionId = normalizeSessionId(context);
-  const run = async () => {
-    throwIfAborted(signal);
-    const prepared = await prepareToolArgs(toolName, rawArgs, context, signal);
-    throwIfAborted(signal);
-    return withQueues(
-      getTargetQueueKeys(prepared.args),
+  const sessionId = typeof context?.sessionId === 'string' ? context.sessionId.trim() : undefined;
+  // The bridge owns tab/ref state. The extension only locks and validates explicit targets.
+  const args = isPlainObject(rawArgs) ? { ...rawArgs } : {};
+  const run = () =>
+    withQueues(
+      getTargetQueueKeys(args),
       async () => {
         throwIfAborted(signal);
-        if (context?.transport === 'cli' && typeof prepared.args.tabId === 'number') {
-          const tab = await getTab(prepared.args.tabId);
+        if (context?.transport === 'cli' && typeof args.tabId === 'number') {
+          const tab = await chrome.tabs.get(args.tabId).catch(() => null);
           throwIfAborted(signal);
           if (!tab) throw new Error('TARGET_CLOSED: select an existing tab with use or open');
         }
         if (context?.documentId) {
           const frame = await chrome.webNavigation.getFrame({
-            tabId: prepared.args.tabId,
-            frameId: prepared.args.frameId ?? 0,
+            tabId: args.tabId,
+            frameId: args.frameId ?? 0,
           });
           throwIfAborted(signal);
           if (!frame || frame.documentId !== context.documentId) {
@@ -549,19 +150,13 @@ export async function runBrowserToolCallWithIsolation(
                 strictTarget: context.transport === 'cli',
               }
             : executionContext;
-        const result = await execute(prepared.args, boundExecution);
-        throwIfAborted(signal);
-        if (context?.transport !== 'cli') {
-          await finalizeToolCall(sessionId, toolName, prepared, result, signal);
-        }
+        const result = await execute(args, boundExecution);
         throwIfAborted(signal);
         return result;
       },
       signal,
     );
-  };
-
-  // Cancellation frees the session, but target locks remain until execution actually settles.
+  // Cancellation frees the task queue, not the lock of an operation still running in Chrome.
   const waitForRun = () => {
     throwIfAborted(signal);
     return waitForCompletion(run(), signal);
@@ -569,34 +164,6 @@ export async function runBrowserToolCallWithIsolation(
   return sessionId ? enqueue(`session:${sessionId}`, waitForRun, signal) : waitForRun();
 }
 
-export function getBrowserToolSessionBinding(sessionId: string): BrowserSessionBinding | undefined {
-  return sessionBindings.get(sessionId);
-}
-
-export function clearBrowserToolSessionState(): void {
-  sessionBindings.clear();
+export function clearBrowserToolQueues(): void {
   isolationQueues.clear();
-}
-
-let listenersInstalled = false;
-
-export function initBrowserToolSessionListeners(): void {
-  if (listenersInstalled) return;
-  listenersInstalled = true;
-
-  chrome.tabs?.onRemoved?.addListener?.((tabId) => {
-    for (const [sessionId, binding] of sessionBindings) {
-      if (binding.tabId === tabId) {
-        sessionBindings.delete(sessionId);
-      }
-    }
-  });
-
-  chrome.windows?.onRemoved?.addListener?.((windowId) => {
-    for (const [sessionId, binding] of sessionBindings) {
-      if (binding.windowId === windowId) {
-        sessionBindings.delete(sessionId);
-      }
-    }
-  });
 }

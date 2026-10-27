@@ -62,7 +62,6 @@ export const handleCallTool = async (param: ToolCallParam) => {
 
   try {
     return await runBrowserToolCallWithIsolation(
-      param.name,
       param.args,
       param.context,
       (args, executionContext) => tool.execute(args, executionContext),

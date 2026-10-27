@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "Chrome MCPサーバー"
+    "message": "AIEasyBrowser"
   },
   "extensionDescription": {
     "message": "自身のChromeブラウザの機能を外部に公開します"
@@ -64,9 +64,6 @@
   },
   "connectedServiceNotStartedStatus": {
     "message": "接続済み、サービス未起動"
-  },
-  "mcpServerConfigLabel": {
-    "message": "MCPサーバー設定"
   },
   "connectionPortLabel": {
     "message": "接続ポート"

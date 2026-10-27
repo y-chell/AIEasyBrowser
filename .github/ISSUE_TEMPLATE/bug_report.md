@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug in the extension, native server, or MCP tools
+about: Report a bug in the CLI, extension, or local bridge
 title: '[bug] '
 labels: bug
 assignees: ''
@@ -16,8 +16,8 @@ Briefly describe the problem.
 - Browser and version:
 - Node.js version:
 - Package manager:
-- MCP client and version:
-- Connection type: streamableHttp / stdio
+- Agent and version:
+- CLI command and bridge URL:
 - Repo commit or release version:
 
 ## Steps to reproduce

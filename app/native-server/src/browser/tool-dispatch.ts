@@ -1,7 +1,6 @@
-import { NativeMessageType, TOOL_SCHEMAS } from 'aieasybrowser-shared';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { NativeMessageType, TOOL_SCHEMAS, type BrowserToolResult } from 'aieasybrowser-shared';
 import type { NativeMessagingHost, ExtensionRequestOptions } from '../native-messaging-host';
-import { getToolCallTimeoutMs } from '../mcp/tool-timeouts';
+import { getToolCallTimeoutMs } from './tool-timeouts';
 
 export interface BrowserDispatchContext {
   transport?: string;
@@ -36,7 +35,7 @@ export async function dispatchBrowserTool(
   args: Record<string, unknown>,
   context: BrowserDispatchContext,
   execution: ExtensionRequestOptions = {},
-): Promise<CallToolResult> {
+): Promise<BrowserToolResult> {
   execution.signal?.throwIfAborted();
   validateBrowserToolArguments(name, args);
   const response = await host.sendRequestToExtensionAndWait(

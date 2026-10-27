@@ -32,7 +32,6 @@
     "typecheck:shared": "pnpm --filter aieasybrowser-shared exec tsc --noEmit --pretty false",
     "typecheck:native": "pnpm --filter aieasybrowser-bridge exec tsc --noEmit --pretty false",
     "typecheck:extension": "pnpm --filter aieasybrowser-extension exec tsc --noEmit --pretty false",
-    "smoke:stdio": "pnpm --filter aieasybrowser-bridge smoke:stdio",
     "test": "pnpm run build:shared && pnpm --filter aieasybrowser-bridge exec jest --runInBand && pnpm --filter aieasybrowser-extension test",
     "prepare": "husky"
   },

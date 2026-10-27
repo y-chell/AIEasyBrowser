@@ -8,10 +8,7 @@ import {
   CHROME_EXTENSION_KEY,
   DEFAULT_SERVER_PORT,
 } from 'aieasybrowser-shared';
-import {
-  DEFAULT_CHROME_EXTENSION_ORIGIN,
-  parseMcpHttpSecurityConfig,
-} from '../server/mcp-http-security';
+import { DEFAULT_CHROME_EXTENSION_ORIGIN, parseHttpSecurityConfig } from '../server/http-security';
 import { EXTENSION_ID, HOST_NAME } from './constant';
 import { createManifestContent, resolvePreferredNodeExecPath, writeNodePathFile } from './utils';
 
@@ -99,7 +96,7 @@ describe('AIEasyBrowser native host identity', () => {
   });
 
   test('allows this extension instead of the original project origin in default HTTP security', () => {
-    const config = parseMcpHttpSecurityConfig({ listenHost: '127.0.0.1', env: {} });
+    const config = parseHttpSecurityConfig({ listenHost: '127.0.0.1', env: {} });
     expect(DEFAULT_CHROME_EXTENSION_ORIGIN).toBe(`chrome-extension://${CHROME_EXTENSION_ID}`);
     expect(config.allowedOrigins.has(DEFAULT_CHROME_EXTENSION_ORIGIN)).toBe(true);
     expect(config.allowedOrigins.has(`chrome-extension://${ORIGINAL_EXTENSION_ID}`)).toBe(false);

@@ -6,7 +6,7 @@
 
 [English](README.md)
 
-AIEasyBrowser 是面向 Agent 的浏览器控制工具，通过 CLI + Skill 或 MCP，把日常使用的 Chrome 变成 AI 可以读取、操作和验证的浏览器环境。已有标签页、登录态和扩展都留在原来的 Chrome profile 中，不必为自动化重新准备一套浏览器。
+AIEasyBrowser 是面向 Agent 的浏览器控制工具，通过 CLI + Skill，把日常使用的 Chrome 变成 AI 可以读取、操作和验证的浏览器环境。已有标签页、登录态和扩展都留在原来的 Chrome profile 中，不必为自动化重新准备一套浏览器。
 
 目标很明确：让 AI 更方便、更快速、更准确地控制浏览器。减少接入和重连时的人工中断，给 Agent 可定位的页面元素，并让每次操作都有可观察、可验证的结果。
 
@@ -42,9 +42,9 @@ Agent 可以依据元素引用和选择器执行操作，减少只靠截图猜�
 
 ### 把调用次数花在任务上
 
-CLI 不进行 MCP 握手，也不需要预加载完整工具 schema。`act` 在一条命令中顺序执行动作、验证明确的后置条件并返回新扫描。Skill 提供使用规则；高级能力需要时才通过 `tools`、`describe`、`call` 查询和调用。
+CLI 直接发送本机 JSON 请求，不需要协议握手或预加载完整工具 schema。`act` 在一条命令中顺序执行动作、验证明确的后置条件并返回新扫描。Skill 提供使用规则；高级能力需要时才通过 `tools`、`describe`、`call` 查询和调用。
 
-现有 MCP 接口继续提供全部 39 个浏览器工具。两种入口复用同一扩展和执行内核；CLI 减少的是 Agent 侧的工具定义上下文和任务往返，不意味着每次 Node 冷启动都比已经连接的 MCP 调用快。
+全部 39 项浏览器能力都可通过 CLI 使用，包括截图、网络、CDP、剪贴板和性能分析。减少的是 Agent 侧的工具定义上下文、重复输出和任务往返，底层仍由同一扩展执行浏览器动作；Node 冷启动仍有成本，不把调用次数减少等同于每个动作都更快。
 
 ## 能做什么
 
@@ -62,10 +62,10 @@ CLI 不进行 MCP 握手，也不需要预加载完整工具 schema。`act` 在�
 ## 工作方式
 
 ```text
-CLI / MCP 客户端 -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser 扩展 -> 当前 Chrome profile
+CLI -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser 扩展 -> 当前 Chrome profile
 ```
 
-扩展通过 Native Messaging 启动本机桥接器。CLI 直接向本机 `/browser` 发送 JSON 请求，命名会话状态保存在这个已常驻的桥接器中，无需另启 daemon。MCP 客户端通过 Streamable HTTP 或项目提供的 STDIO 代理连接。所有入口控制的是同一个 Chrome，不会额外启动浏览器。
+扩展通过 Native Messaging 启动本机桥接器。CLI 直接向本机 `/browser` 发送 JSON 请求，命名任务状态保存在这个已常驻的桥接器中，无需另启 daemon，也不会额外启动浏览器。Skill 教 Agent 如何选择目标、使用引用和处理失败，不承担浏览器执行。
 
 ## 安装
 
@@ -126,7 +126,7 @@ aieasybrowser health
 
 这会把本地源码包的 CLI 链接到当前 Node.js 的全局命令目录，不下载另一个浏览器工具。更换 Node.js 版本后需重新链接。也可以不注册全局命令，直接执行 `node app/native-server/dist/cli.js health`。
 
-CLI 默认连接 `http://127.0.0.1:12307/browser`，复用已有 host、port 和 bearer token 环境变量。显式指定地址时使用 `--url http://127.0.0.1:12307`，不要传 MCP 的 `?profile=full` 地址。该入口只接受回环来源，并校验 Host、Origin 和配置的 token；不能作为远程 MCP 的绕过入口。
+CLI 默认连接 `http://127.0.0.1:12307/browser`。显式指定地址时使用 `--url http://127.0.0.1:12307`，或设置下文的 `AIEASYBROWSER_*` 环境变量。该入口只接受回环来源，并校验 Host、Origin 和配置的 bearer token。
 
 ### 安装 Skill
 
@@ -141,7 +141,7 @@ New-Item -ItemType Junction -Path "$HOME/.agents/skills/aieasybrowser" -Target $
 New-Item -ItemType Junction -Path "$HOME/.claude/skills/aieasybrowser" -Target $skillSource
 ```
 
-移动源码目录后需更新链接。Skill 的发现方式以 [Codex 官方文档](https://developers.openai.com/codex/skills/) 和 [Claude Code 官方文档](https://code.claude.com/docs/en/skills) 为准。它不要求加载 MCP 服务；若同时配置了 MCP，客户端仍可能加载其工具定义，CLI 不会自动修改客户端配置。
+移动源码目录后需更新链接。Skill 的发现方式以 [Codex 官方文档](https://developers.openai.com/codex/skills/) 和 [Claude Code 官方文档](https://code.claude.com/docs/en/skills) 为准。CLI + Skill 不需要额外的工具协议配置。
 
 ### 操作与验证
 
@@ -169,7 +169,7 @@ JavaScript 条件复用 `chrome_javascript` 的执行引擎：顶层页面默认
 
 默认扫描最多返回 40 个元素、10 个文本块、20 个 frame 摘要和 10 条 frame 错误，元素/文本限制是整页全局预算，而非每个 iframe 单独计算。`truncated: true` 或非空 `errors` 不代表已经看到完整页面；可指定 `scan --frame <id>` 或调整预算。表单值不自动回显，受保护字段会标记 `protected`。
 
-每条操作命令 stdout 输出一份 JSON。退出码：`0` 成功、`2` 参数错误、`3` 操作或超时失败、`4` 连接/协议失败、`130` 取消。默认整条命令超时 60 秒，可用 `--timeout <毫秒>` 调整，最大 120 秒。
+每条操作命令 stdout 输出一份 JSON。退出码：`0` 成功、`2` 参数错误、`3` 操作或超时失败、`4` 连接、授权或响应错误、`130` 取消。默认整条命令超时 60 秒，可用 `--timeout <毫秒>` 调整，最大 120 秒。
 
 失败必须同时看 `phase`、`actionStatus`、`completed` 和 `failedAction`：
 
@@ -193,73 +193,30 @@ aieasybrowser --session github session --forget
 
 `call` 仅在 session 已选择目标、且工具接受 `tabId` 时补入该目标；没有已选目标时保留工具原来的默认规则，系统剪贴板读写等操作无需先选择标签。其他工具遵循自己的 URL/活动标签规则，例如抓包工具没有 `tabId`。不带 tab IDs 或 URL 的 `chrome_close_tabs` 必须有已选目标，只关闭该 session 的标签，不默认关闭用户当前活动页。高级调用继续拒绝未声明的顶层参数，但不是完整 JSON Schema 校验器。最多保留 64 个任务 session；`session --forget` 只清状态，不关闭标签。桥接器/扩展重启后状态不持久化，需重新选择真实标签并扫描，旧句柄不会自动恢复或重放。
 
-## MCP 连接
+## 本机连接配置
 
-### Codex
+默认配置即可使用。需要调整时，使用以下环境变量：
 
-根据 [Codex 官方 MCP 文档](https://developers.openai.com/codex/mcp/)，使用以下命令添加 Streamable HTTP 服务：
+| 变量                       | 默认值      | 用途                                                                                        |
+| -------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
+| `AIEASYBROWSER_HOST`       | `127.0.0.1` | 桥接器监听地址、CLI 连接地址，以及扩展构建时的本机探测地址；只允许回环 host，不带协议或端口 |
+| `AIEASYBROWSER_PORT`       | `12307`     | CLI 与 doctor 的连接端口，须与扩展当前使用的端口一致，范围 `1..65535`                       |
+| `AIEASYBROWSER_AUTH_TOKEN` | 未设置      | 可选本机 bearer token；桥接器与 CLI 使用同一值，不能包含内部空白                            |
+| `AIEASYBROWSER_NODE_PATH`  | 未设置      | Unix 启动器的 Node.js 路径覆盖；Windows 仍只使用 `node_path.txt`                            |
+
+监听端口由扩展通过 Native Messaging 提供，设置 CLI 的端口不会重配置已运行的服务。修改 host 时，扩展构建环境与 Native Host 运行环境必须一致。桥接器继承 Chrome 的运行环境；只在当前终端设置 token 不会改变已运行的桥接器。
+
+项目已移除 `/mcp`、`/sse`、`/messages`、STDIO 代理及 `full` / `core` / `search` 协议 profile。已配置过本项目 MCP 的 Agent 客户端应删除对应服务项。旧 `CHROME_MCP_*`、`MCP_HTTP_*` 环境变量不再读取；浏览器能力没有删除，统一通过 CLI 的 `tools`、`describe`、`call` 按需使用。
+
+Codex 中原服务名为 `aieasybrowser` 时，按[官方命令参考](https://learn.chatgpt.com/docs/developer-commands?surface=cli)移除这一项，不影响其他服务：
 
 ```powershell
-codex mcp add aieasybrowser --url "http://127.0.0.1:12307/mcp?profile=full"
+codex mcp remove aieasybrowser
 ```
-
-对应的 `~/.codex/config.toml` 配置为：
-
-```toml
-[mcp_servers.aieasybrowser]
-url = "http://127.0.0.1:12307/mcp?profile=full"
-```
-
-添加后在新启动的 Codex 会话中使用 `/mcp` 查看连接状态。
-
-### 其他 Streamable HTTP 客户端
-
-默认地址为 `http://127.0.0.1:12307/mcp?profile=full`。对于支持 HTTP 且采用 `mcpServers` 配置格式的客户端：
-
-```json
-{
-  "mcpServers": {
-    "aieasybrowser": {
-      "url": "http://127.0.0.1:12307/mcp?profile=full"
-    }
-  }
-}
-```
-
-### STDIO
-
-使用项目提供的 STDIO 入口，将示例中的 `C:/path/to/AIEasyBrowser` 替换为源码目录的绝对路径：
-
-```json
-{
-  "mcpServers": {
-    "aieasybrowser": {
-      "command": "node",
-      "args": ["C:/path/to/AIEasyBrowser/app/native-server/dist/mcp/mcp-server-stdio.js"]
-    }
-  }
-}
-```
-
-STDIO 入口是本机 HTTP 桥接器的代理，不负责加载扩展或启动 Native Host。使用前仍需完成扩展加载与注册，并保持 Chrome 和桥接器运行。
-
-## 工具目录
-
-默认使用 `full`。三种 profile 只决定客户端最初看到哪些工具，不是权限等级，也不减少底层浏览器能力。
-
-| Profile  | 初始公开工具数 | 取舍                                                       |
-| -------- | -------------- | ---------------------------------------------------------- |
-| `full`   | 39             | 直接公开全部浏览器工具，无需先发现工具                     |
-| `core`   | 15             | 12 个常用浏览器工具 + 3 个目录工具，减少初始工具定义上下文 |
-| `search` | 5              | 健康检查、标签页列表 + 3 个目录工具，初始目录最小          |
-
-HTTP 通过 URL 选择，例如 `?profile=core`；STDIO 通过环境变量 `CHROME_MCP_TOOL_PROFILE` 选择。
-
-`core` 和 `search` 可用 `chrome_search_tools` 搜索完整目录、`chrome_describe_tool` 查询参数，再通过 `chrome_call_tool` 调用未直接公开的工具。较小目录会增加发现和调用步骤，不代表执行更快或更准确；通常优先使用 `full`。
 
 ## 连接检查与诊断
 
-让 Agent 调用 `chrome_health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器工具数，当前为 39，不等同于较小 profile 的初始公开数量。
+运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 39。
 
 安装或启动异常时，在源码根目录执行诊断命令：
 
@@ -271,7 +228,7 @@ pnpm --filter aieasybrowser-bridge exec node dist/cli.js doctor
 
 ## 边界与权限
 
-AIEasyBrowser 操作的是真实 Chrome profile 和已登录会话。桥接器默认只监听本机回环地址，只应向可信的本地 Agent 提供 MCP 访问。
+AIEasyBrowser 操作的是真实 Chrome profile 和已登录会话。桥接器只监听本机回环地址，只应向可信的本地 Agent 提供 CLI 访问，不提供远程监听配置。
 
 自动建立桥接连接不等于取消 Chrome 权限限制。使用 debugger/CDP 的工具仍可能显示 Chrome 的调试提示，也可能与其他调试器争用同一标签页；网站自身的登录、验证码、Cloudflare 和风控规则仍然生效。复用现有登录环境，不意味着保证绕过这些检查。
 
@@ -288,18 +245,9 @@ pnpm run typecheck
 pnpm lint
 pnpm test
 pnpm run build
-pnpm smoke:stdio
-pnpm --filter aieasybrowser-bridge smoke:stdio -- --profile search
-pnpm --filter aieasybrowser-bridge smoke:stdio -- --profile core
 ```
 
-普通 STDIO smoke 检查协议握手和工具目录，不执行真实浏览器动作。安装完成后，可运行端到端浏览器 smoke：
-
-```powershell
-pnpm --filter aieasybrowser-bridge smoke:stdio -- --call-health --real-browser
-```
-
-该测试会新建临时标签页、操作测试表单与剪贴板，并在结束时清理标签页、恢复原剪贴板。
+测试覆盖 CLI 参数、命名任务、动作/验证/扫描、输入能力契约、本机安全边界、取消与目标锁；旧协议入口返回 404。真实浏览器的复测步骤、结果和未验证范围维护在 `docs/KNOWN-ISSUES.md`，不把单元测试通过等同于所有网站和全部高级工具都已验收。
 
 ## 许可证
 

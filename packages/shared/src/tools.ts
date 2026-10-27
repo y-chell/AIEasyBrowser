@@ -1,4 +1,4 @@
-import { type Tool, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { BrowserToolDefinition } from './types';
 
 export const TOOL_NAMES = {
   BROWSER: {
@@ -54,7 +54,7 @@ export const TOOL_NAMES = {
   },
 };
 
-const RAW_TOOL_SCHEMAS: Tool[] = [
+const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.HEALTH,
     description:
@@ -1573,7 +1573,7 @@ const RAW_TOOL_SCHEMAS: Tool[] = [
   {
     name: TOOL_NAMES.BROWSER.CDP_BATCH,
     description:
-      'Send multiple Chrome DevTools Protocol commands to a tab using one shared debugger session. Use this to reduce MCP round trips for flows like DOM.getDocument -> DOM.querySelector -> DOM.getBoxModel -> Input.dispatchMouseEvent. Good for trusted click sequences: mouseMoved -> mousePressed -> mouseReleased. Use bringToFront before actions on throttled background tabs.',
+      'Send multiple Chrome DevTools Protocol commands to a tab using one shared debugger session. Use this to reduce browser round trips for flows like DOM.getDocument -> DOM.querySelector -> DOM.getBoxModel -> Input.dispatchMouseEvent. Good for trusted click sequences: mouseMoved -> mousePressed -> mouseReleased. Use bringToFront before actions on throttled background tabs.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1834,12 +1834,12 @@ const RAW_TOOL_SCHEMAS: Tool[] = [
         clear: {
           type: 'boolean',
           description:
-            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style).',
+            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading.',
         },
         clearAfterRead: {
           type: 'boolean',
           description:
-            'Buffer mode only: clear the buffered logs for this tab AFTER reading, to avoid duplicate messages on subsequent calls (default: false). This matches mcp-tools.js behavior.',
+            'Buffer mode only: clear the buffered logs for this tab AFTER reading, to avoid duplicate messages on subsequent calls (default: false).',
         },
         pattern: {
           type: 'string',
@@ -2040,120 +2040,7 @@ const RAW_TOOL_SCHEMAS: Tool[] = [
   },
 ];
 
-const SUCCESS_OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-  },
-  required: ['success'],
-  additionalProperties: true,
-} satisfies NonNullable<Tool['outputSchema']>;
-
-const HEALTH_OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    tool: { type: 'string' },
-    checkedAt: { type: 'number' },
-    extension: { type: 'object' },
-    schema: { type: 'object' },
-    browser: { type: 'object' },
-    nativeHost: { type: 'object' },
-  },
-  required: ['success', 'tool', 'checkedAt', 'extension', 'schema', 'browser', 'nativeHost'],
-  additionalProperties: true,
-} satisfies NonNullable<Tool['outputSchema']>;
-
-const BROWSER_INVENTORY_OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    windowCount: { type: 'number' },
-    tabCount: { type: 'number' },
-    windows: { type: 'array' },
-  },
-  required: ['windowCount', 'tabCount', 'windows'],
-  additionalProperties: true,
-} satisfies NonNullable<Tool['outputSchema']>;
-
-const HISTORY_OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    items: { type: 'array' },
-    totalCount: { type: 'number' },
-    timeRange: { type: 'object' },
-    query: { type: 'string' },
-  },
-  required: ['items', 'totalCount', 'timeRange'],
-  additionalProperties: true,
-} satisfies NonNullable<Tool['outputSchema']>;
-
-const SUCCESS_OUTPUT_TOOLS = new Set<string>([
-  TOOL_NAMES.BROWSER.LIST_FRAMES,
-  TOOL_NAMES.BROWSER.SCAN_COMPACT,
-  TOOL_NAMES.BROWSER.TAB_GROUP,
-  TOOL_NAMES.BROWSER.NETWORK_REQUEST,
-  TOOL_NAMES.BROWSER.JAVASCRIPT,
-  TOOL_NAMES.BROWSER.CDP_COMMAND,
-  TOOL_NAMES.BROWSER.CDP_BATCH,
-  TOOL_NAMES.BROWSER.CONSOLE,
-  TOOL_NAMES.BROWSER.COLLECT_DEBUG_EVIDENCE,
-  TOOL_NAMES.BROWSER.QUERY_ELEMENTS,
-  TOOL_NAMES.BROWSER.GET_ELEMENT_HTML,
-  TOOL_NAMES.BROWSER.CLIPBOARD,
-  TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
-  TOOL_NAMES.BROWSER.WAIT_FOR,
-  TOOL_NAMES.BROWSER.ASSERT,
-]);
-
 type JsonSchemaObject = Record<string, unknown>;
-
-const READ_ONLY_TOOLS = new Set<string>([
-  TOOL_NAMES.BROWSER.HEALTH,
-  TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS,
-  TOOL_NAMES.BROWSER.LIST_FRAMES,
-  TOOL_NAMES.BROWSER.PERFORMANCE_ANALYZE_INSIGHT,
-  TOOL_NAMES.BROWSER.SCAN_COMPACT,
-  TOOL_NAMES.BROWSER.READ_PAGE,
-  TOOL_NAMES.BROWSER.QUERY_ELEMENTS,
-  TOOL_NAMES.BROWSER.GET_ELEMENT_HTML,
-  TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
-  TOOL_NAMES.BROWSER.WAIT_FOR,
-  TOOL_NAMES.BROWSER.ASSERT,
-  TOOL_NAMES.BROWSER.WEB_FETCHER,
-  TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD,
-  TOOL_NAMES.BROWSER.HISTORY,
-  TOOL_NAMES.BROWSER.BOOKMARK_SEARCH,
-  TOOL_NAMES.BROWSER.GET_UPLOAD_STATUS,
-]);
-
-const NON_DESTRUCTIVE_MUTATING_TOOLS = new Set<string>([
-  TOOL_NAMES.BROWSER.SCREENSHOT,
-  TOOL_NAMES.BROWSER.SWITCH_TAB,
-  TOOL_NAMES.BROWSER.BOOKMARK_ADD,
-]);
-
-const IDEMPOTENT_MUTATING_TOOLS = new Set<string>([
-  TOOL_NAMES.BROWSER.CLOSE_TABS,
-  TOOL_NAMES.BROWSER.SWITCH_TAB,
-  TOOL_NAMES.BROWSER.BOOKMARK_DELETE,
-]);
-
-const CLOSED_WORLD_TOOLS = new Set<string>([
-  TOOL_NAMES.BROWSER.HEALTH,
-  TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS,
-  TOOL_NAMES.BROWSER.LIST_FRAMES,
-  TOOL_NAMES.BROWSER.PERFORMANCE_ANALYZE_INSIGHT,
-  TOOL_NAMES.BROWSER.WAIT_FOR_TAB,
-  TOOL_NAMES.BROWSER.CLOSE_TABS,
-  TOOL_NAMES.BROWSER.SWITCH_TAB,
-  TOOL_NAMES.BROWSER.TAB_GROUP,
-  TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD,
-  TOOL_NAMES.BROWSER.HISTORY,
-  TOOL_NAMES.BROWSER.BOOKMARK_SEARCH,
-  TOOL_NAMES.BROWSER.BOOKMARK_ADD,
-  TOOL_NAMES.BROWSER.BOOKMARK_DELETE,
-  TOOL_NAMES.BROWSER.GET_UPLOAD_STATUS,
-]);
 
 function closeDeclaredObjectSchemas(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -2181,33 +2068,7 @@ function closeDeclaredObjectSchemas(value: unknown): unknown {
   return schema;
 }
 
-function getToolAnnotations(name: string): ToolAnnotations {
-  const readOnly = READ_ONLY_TOOLS.has(name);
-
-  return {
-    readOnlyHint: readOnly,
-    destructiveHint: readOnly ? false : !NON_DESTRUCTIVE_MUTATING_TOOLS.has(name),
-    idempotentHint: readOnly || IDEMPOTENT_MUTATING_TOOLS.has(name),
-    openWorldHint: !CLOSED_WORLD_TOOLS.has(name),
-  };
-}
-
-function getToolOutputSchema(name: string): Tool['outputSchema'] | undefined {
-  if (name === TOOL_NAMES.BROWSER.HEALTH) return HEALTH_OUTPUT_SCHEMA;
-  if (name === TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS) {
-    return BROWSER_INVENTORY_OUTPUT_SCHEMA;
-  }
-  if (name === TOOL_NAMES.BROWSER.HISTORY) return HISTORY_OUTPUT_SCHEMA;
-  if (SUCCESS_OUTPUT_TOOLS.has(name)) return SUCCESS_OUTPUT_SCHEMA;
-  return undefined;
-}
-
-export const TOOL_SCHEMAS: Tool[] = RAW_TOOL_SCHEMAS.map((tool) => {
-  const outputSchema = getToolOutputSchema(tool.name);
-  return {
-    ...tool,
-    inputSchema: closeDeclaredObjectSchemas(tool.inputSchema) as Tool['inputSchema'],
-    annotations: getToolAnnotations(tool.name),
-    ...(outputSchema ? { outputSchema } : {}),
-  };
-});
+export const TOOL_SCHEMAS: BrowserToolDefinition[] = RAW_TOOL_SCHEMAS.map((tool) => ({
+  ...tool,
+  inputSchema: closeDeclaredObjectSchemas(tool.inputSchema) as BrowserToolDefinition['inputSchema'],
+}));

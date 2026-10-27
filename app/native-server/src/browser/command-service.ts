@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { TOOL_SCHEMAS } from 'aieasybrowser-shared';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { TOOL_SCHEMAS, type BrowserToolResult } from 'aieasybrowser-shared';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { BRIDGE_VERSION } from '../constant';
 import {
@@ -45,7 +44,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function decodeToolResult(result: CallToolResult): unknown {
+function decodeToolResult(result: BrowserToolResult): unknown {
   let payload: unknown = result.structuredContent;
   if (payload === undefined) {
     const text = result.content

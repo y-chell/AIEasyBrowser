@@ -1,7 +1,6 @@
-import type { CallToolResult, TextContent, ImageContent } from '@modelcontextprotocol/sdk/types.js';
+import type { BrowserToolResult } from 'aieasybrowser-shared';
 
-export interface ToolResult extends CallToolResult {
-  content: (TextContent | ImageContent)[];
+export interface ToolResult extends BrowserToolResult {
   isError: boolean;
 }
 

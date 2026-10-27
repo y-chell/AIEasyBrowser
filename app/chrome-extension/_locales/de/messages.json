@@ -85,10 +85,6 @@
     "message": "Verbunden, Service nicht gestartet",
     "description": "Verbunden aber Service nicht gestartet Status"
   },
-  "mcpServerConfigLabel": {
-    "message": "MCP Server-Konfiguration",
-    "description": "MCP Server-Konfigurationsabschnittslabel"
-  },
   "connectionPortLabel": {
     "message": "Verbindungsport",
     "description": "Verbindungsport-Eingabelabel"

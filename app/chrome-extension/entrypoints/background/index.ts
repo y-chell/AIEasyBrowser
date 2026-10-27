@@ -1,5 +1,4 @@
 import { initNativeHostListener } from './native-host';
-import { initBrowserToolSessionListeners } from './tools/browser-session-context';
 
 /**
  * Background script entry point
@@ -7,5 +6,4 @@ import { initBrowserToolSessionListeners } from './tools/browser-session-context
  */
 export default defineBackground(() => {
   initNativeHostListener();
-  initBrowserToolSessionListeners();
 });

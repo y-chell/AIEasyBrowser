@@ -42,7 +42,7 @@ STDERR_LOG="${LOG_DIR}/native_host_stderr_unix_${TIMESTAMP}.log"
     echo "LOG_DIR: ${LOG_DIR}"
     echo "NODE_SCRIPT: ${NODE_SCRIPT}"
     echo "Initial PATH: ${PATH}"
-    echo "CHROME_MCP_NODE_PATH: ${CHROME_MCP_NODE_PATH:-<unset>}"
+    echo "AIEASYBROWSER_NODE_PATH: ${AIEASYBROWSER_NODE_PATH:-<unset>}"
     echo "VOLTA_HOME: ${VOLTA_HOME:-<unset>}"
     echo "ASDF_DATA_DIR: ${ASDF_DATA_DIR:-<unset>}"
     echo "FNM_DIR: ${FNM_DIR:-<unset>}"
@@ -58,10 +58,10 @@ NODE_PATH_FILE="${SCRIPT_DIR}/node_path.txt"
 
 echo "Searching for Node.js..." >> "${WRAPPER_LOG}"
 
-# Priority 0: CHROME_MCP_NODE_PATH environment variable override
-echo "[Priority 0] Checking CHROME_MCP_NODE_PATH override" >> "${WRAPPER_LOG}"
-if [ -n "${CHROME_MCP_NODE_PATH:-}" ]; then
-    CANDIDATE_NODE="${CHROME_MCP_NODE_PATH}"
+# Priority 0: AIEASYBROWSER_NODE_PATH environment variable override
+echo "[Priority 0] Checking AIEASYBROWSER_NODE_PATH override" >> "${WRAPPER_LOG}"
+if [ -n "${AIEASYBROWSER_NODE_PATH:-}" ]; then
+    CANDIDATE_NODE="${AIEASYBROWSER_NODE_PATH}"
     # Expand tilde
     if [[ "${CANDIDATE_NODE}" == "~/"* ]]; then
         CANDIDATE_NODE="${HOME}/${CANDIDATE_NODE#~/}"
@@ -72,10 +72,10 @@ if [ -n "${CHROME_MCP_NODE_PATH:-}" ]; then
     fi
     if [ -x "${CANDIDATE_NODE}" ]; then
         NODE_EXEC="${CANDIDATE_NODE}"
-        NODE_EXEC_SOURCE="CHROME_MCP_NODE_PATH"
-        echo "Found node via CHROME_MCP_NODE_PATH: ${NODE_EXEC}" >> "${WRAPPER_LOG}"
+        NODE_EXEC_SOURCE="AIEASYBROWSER_NODE_PATH"
+        echo "Found node via AIEASYBROWSER_NODE_PATH: ${NODE_EXEC}" >> "${WRAPPER_LOG}"
     else
-        echo "CHROME_MCP_NODE_PATH is set but not executable: ${CANDIDATE_NODE}" >> "${WRAPPER_LOG}"
+        echo "AIEASYBROWSER_NODE_PATH is set but not executable: ${CANDIDATE_NODE}" >> "${WRAPPER_LOG}"
     fi
 fi
 
@@ -228,8 +228,8 @@ fi
 if [ -z "${NODE_EXEC}" ]; then
     {
         echo "ERROR: Node.js executable not found!"
-        echo "Searched: CHROME_MCP_NODE_PATH, node_path.txt, relative path, Volta, asdf, fnm, NVM, common paths, command -v, PATH"
-        echo "To fix: Set CHROME_MCP_NODE_PATH environment variable or run 'aieasybrowser doctor --fix'"
+        echo "Searched: AIEASYBROWSER_NODE_PATH, node_path.txt, relative path, Volta, asdf, fnm, NVM, common paths, command -v, PATH"
+        echo "To fix: Set AIEASYBROWSER_NODE_PATH environment variable or run 'aieasybrowser doctor --fix'"
     } >> "${WRAPPER_LOG}"
     exit 1
 fi

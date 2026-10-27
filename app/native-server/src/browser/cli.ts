@@ -1,7 +1,7 @@
 import { Command, InvalidArgumentError } from 'commander';
 import * as fs from 'node:fs';
 import { isIP } from 'node:net';
-import { getChromeMcpUrl, getChromeMcpAuthHeaders } from '../constant';
+import { getBridgeBaseUrl, getBridgeAuthHeaders } from '../constant';
 import { BrowserCommandError, browserFailure, type BrowserCommandResponse } from './protocol';
 
 export const BROWSER_COMMAND_NAMES = new Set([
@@ -54,9 +54,10 @@ export function parseCliJson(value: string): unknown {
 }
 
 export function getBrowserEndpoint(value?: string): string {
+  const endpoint = value ?? getBridgeBaseUrl();
   let url: URL;
   try {
-    url = new URL(value ?? new URL(getChromeMcpUrl()).origin);
+    url = new URL(endpoint);
   } catch {
     throw new BrowserCommandError(
       'INVALID_ARGUMENT',
@@ -89,9 +90,14 @@ export function browserExitCode(response: BrowserCommandResponse): number {
   if (response.ok) return 0;
   if (response.error?.code === 'INVALID_ARGUMENT') return 2;
   if (
-    ['CONNECTION_FAILED', 'BRIDGE_UNAVAILABLE', 'HTTP_ERROR', 'INVALID_RESPONSE'].includes(
-      response.error?.code || '',
-    )
+    [
+      'CONNECTION_FAILED',
+      'BRIDGE_UNAVAILABLE',
+      'HTTP_ERROR',
+      'INVALID_RESPONSE',
+      'FORBIDDEN',
+      'UNAUTHORIZED',
+    ].includes(response.error?.code || '')
   )
     return 4;
   if (response.error?.code === 'CANCELLED') return 130;
@@ -124,7 +130,7 @@ export async function requestBrowserCommand(
     controller.signal.throwIfAborted();
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getChromeMcpAuthHeaders() },
+      headers: { 'Content-Type': 'application/json', ...getBridgeAuthHeaders() },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });

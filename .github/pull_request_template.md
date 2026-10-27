@@ -17,7 +17,7 @@ List the exact commands you ran, or explain why no local validation was needed.
 
 ```powershell
 # example
-pnpm --filter aieasybrowser-bridge exec jest src/mcp/mcp-server.test.ts --runInBand --coverage=false
+pnpm --filter aieasybrowser-bridge exec jest src/server/browser-routes.test.ts --runInBand --coverage=false
 pnpm --filter aieasybrowser-bridge exec tsc --noEmit
 ```
 

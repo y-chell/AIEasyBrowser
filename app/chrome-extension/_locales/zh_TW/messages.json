@@ -85,10 +85,6 @@
     "message": "已連線，服務未啟動",
     "description": "已連線但服務未啟動狀態"
   },
-  "mcpServerConfigLabel": {
-    "message": "MCP 伺服器設定",
-    "description": "MCP 伺服器設定區段標籤"
-  },
   "connectionPortLabel": {
     "message": "連結埠",
     "description": "連結埠輸入標籤"

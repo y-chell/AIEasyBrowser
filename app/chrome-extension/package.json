@@ -31,7 +31,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "aieasybrowser-shared": "workspace:*",
     "date-fns": "^4.1.0"
   },

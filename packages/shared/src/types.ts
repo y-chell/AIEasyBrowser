@@ -35,3 +35,32 @@ export interface NativeToolProgress {
   total?: number;
   message?: string;
 }
+
+export interface BrowserTextContent {
+  type: 'text';
+  text: string;
+}
+
+export interface BrowserImageContent {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
+export interface BrowserToolResult {
+  content: (BrowserTextContent | BrowserImageContent)[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}
+
+export interface BrowserToolDefinition {
+  name: string;
+  description?: string;
+  inputSchema: {
+    type: 'object';
+    properties?: Record<string, unknown>;
+    required?: string[];
+    additionalProperties?: boolean;
+    [key: string]: unknown;
+  };
+}
