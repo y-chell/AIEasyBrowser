@@ -54,6 +54,29 @@ Use `wait '<condition-json>'` to wait and rescan without repeating an action. Th
 
 Exit codes: `0` success, `2` invalid arguments, `3` operation/timeout failure, `4` connection/authentication/response failure, `130` cancellation.
 
+## Coordinates and trusted input
+
+`chrome_computer` coordinates are **viewport CSS pixels**, not screenshot pixels. Screenshot files are written at `viewport × devicePixelRatio` (on a 1.25 DPR display a 1536×695 viewport produces a 1920×869 PNG). Measuring a target in a saved screenshot and passing those numbers straight to `coordinates` lands up and to the left of the real element by the DPR factor. Get the click point from the page instead:
+
+```sh
+aieasybrowser --session task use 123
+aieasybrowser --session task eval 'const r = document.querySelector(".cf-turnstile").getBoundingClientRect(); return {x: Math.round(r.x + 24), y: Math.round(r.y + r.height / 2)}'
+```
+
+`getBoundingClientRect()` already returns CSS pixels, and `elementInfo.rect` in a click response does too, so both can be reused directly. Re-measure after any layout shift — a toast or a bottom banner changes `y` for the whole page.
+
+`chrome_computer` dispatches `Input.dispatchMouseEvent`, which is trusted input. Prefer it over DOM `click()` when a control checks `event.isTrusted`.
+
+Single `left_click` is not enough for some widgets. Cloudflare Turnstile ignores one synthesized press/release pair but accepts `double_click` at the same point. When a single click reports success but the widget state does not change, retry with `double_click` before concluding that the target is unclickable:
+
+```sh
+aieasybrowser --session task call chrome_computer '{"action":"double_click","coordinates":{"x":601,"y":432}}'
+```
+
+Confirm the effect from page state rather than the click response. For Turnstile, read the hidden field: a non-empty `[name=cf-turnstile-response]` (a solved token is several hundred characters) means the challenge passed.
+
+A cross-origin widget such as `challenges.cloudflare.com` renders inside an iframe that the main document's DOM cannot see, and `Page.getFrameTree` does not list it. `chrome_list_frames` still reports its frame ID and title. Do not read that as "the widget failed to render": if the container has a real bounding box, click it by coordinates. `scan --frame <id>` fails with `Frame documentId is unavailable` on such frames, which is expected and does not block coordinate clicks.
+
 ## Advanced operations
 
 Load only the capability needed:
