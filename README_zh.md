@@ -140,30 +140,3 @@ pnpm --filter aieasybrowser-bridge smoke:stdio -- --call-health --real-browser
 三种目录都能访问保留的全部 39 个浏览器工具，缩小目录并不是删功能。`search` 不保证更快或更准确；只使用本项目时，默认 `full` 就够了。
 
 本次完整构建、扩展类型检查、lint 和 132 个测试通过（Native Server 101 个、扩展 31 个，包含 10 个新增品牌样本）；三种目录的 STDIO smoke 均通过。已核对生成的 manifest 版本为 `0.1.0`、工具栏与扩展图标指向新 PNG、固定扩展 ID 不变。WXT 报告扩展包大小为 1.09 MB。本次未替用户重新加载扩展，也未验证新扩展的真实 Chrome 连接。
-
-### 2026-10-27 真实 Chrome 动作验证（首次闭环）
-
-已完成安装、注册和真实浏览器动作验证。Native Host 注册走 `node dist/cli.js register`，manifest 与注册表指向 `%APPDATA%\Google\Chrome\NativeMessagingHosts\com.aieasybrowser.nativehost.json`，`allowed_origins` 为固定扩展 ID `coleelkpegcobndoloaofalgnkhiamll`。扩展在 host 注册后由自身指数退避重连自动拉起 Native Server（`dist/index.js`，带 `chrome-extension://...` 与 `--parent-window=0` 参数启动），监听 `127.0.0.1:12307`；无需手动重载扩展。
-
-验证方式为 MCP over HTTP 直连 `http://127.0.0.1:12307/mcp?profile=full`，`initialize` → `tools/list` 返回 39 个工具，与目录一致。以下工具经真实 Chrome 动作确认可用（含返回数据核对）：
-
-| 类别       | 已确认工具                                                                                                                                                                             |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 页面读取   | `chrome_read_page`、`chrome_scan_compact`、`chrome_query_elements`、`chrome_get_element_html`、`chrome_get_web_content`、`chrome_list_frames`                                          |
-| 交互       | `chrome_fill_or_select`（文本/下拉/复选）、`chrome_click_element`（ref 与坐标两种路径）、`chrome_computer`（`left_click`/`triple_click`/`type`）、`chrome_keyboard`（单键与组合键）    |
-| 脚本与调试 | `chrome_javascript`（CDP 引擎）、`chrome_cdp_command`、`chrome_cdp_batch`、`chrome_console`                                                                                            |
-| 媒体       | `chrome_screenshot`、`performance_start_trace`/`performance_stop_trace`                                                                                                                |
-| 网络       | `chrome_network_request`、`chrome_network_capture`（`includeStatic` 开关均验证）                                                                                                       |
-| 文件       | `chrome_upload_file`（页面 `files[0]` 已确实注入）、`chrome_get_upload_status`                                                                                                         |
-| 标签与窗口 | `get_windows_and_tabs`、`chrome_navigate`（含 `refresh`、`newWindow`）、`chrome_wait_for`、`chrome_wait_for_tab`、`chrome_tab_group`（`list`/`create`/`ungroup`）、`chrome_close_tabs` |
-| 数据       | `chrome_history`、`chrome_bookmark_search`、`chrome_clipboard`（写入）                                                                                                                 |
-
-验证过程中发现并已确认的行为边界：
-
-`chrome_clipboard` 在 `file://` 页面写剪贴板会触发 Chrome 原生授权弹窗（“查看复制到剪贴板的文字和图片”）。弹窗未响应时 `navigator.clipboard.writeText` 的 await 永不 settle，而扩展侧 `runBrowserToolCallWithIsolation` 用 `enqueue('session:' + sessionId)` 串行化同一 MCP session 的全部调用且无超时保护，因此该 session 后续所有调用都会排在挂起的 Promise 后面；服务端 30s 超时只让客户端拿到错误（`Error calling tool: Request timed out after 30000ms`），不会释放扩展侧队列。授权后队列立即恢复。同时确认队列按 MCP session 隔离：新建 HTTP 会话可绕开已堵塞的 session 继续调用（`chrome_health` 11ms 返回）。`file://` 下的 `chrome_clipboard read_text` 两条路径均报 `Document is not focused`，需真实窗口焦点，未视为缺陷。
-
-`chrome_keyboard` 只接受按键名与组合键（`Enter`、`End`、`Ctrl+C`），传裸字符串 `abc` 返回 `Invalid key string or combination`；纯文本输入用 `chrome_computer` 的 `type`。`chrome_navigate` 传入已存在标签的 `tabId` 时会激活该标签而非导航，需要导航时用 `chrome_cdp_command` 的 `Page.navigate` 或 `refresh`。
-
-`chrome_network_capture` 传入 `tabId` 时返回的是另一个 tabId：`start` 带 `url` 参数会新开标签页并在响应里报告新 tabId，后续 `stop` 必须用返回的那个 id；用原 `tabId` 抓取会得到 `requestCount: 0`。
-
-验证结束时测试标签页与窗口已清理，临时文件已删除，用户原有窗口状态已恢复。
