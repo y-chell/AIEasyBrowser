@@ -65,6 +65,4 @@ Automatic bridge connection does not remove Chrome's permission boundaries, debu
 
 ## License
 
-[MIT](LICENSE). Browser tool implementations build on
-[mcp-chrome-community](https://github.com/y-chell/mcp-chrome-community) and
-[mcp-chrome](https://github.com/hangwin/mcp-chrome); their copyright notices are retained.
+[MIT](LICENSE)

@@ -219,4 +219,4 @@ pnpm --filter aieasybrowser-bridge smoke:stdio -- --call-health --real-browser
 
 ## 许可证
 
-[MIT](LICENSE)。浏览器工具实现基于 [mcp-chrome-community](https://github.com/y-chell/mcp-chrome-community) 和 [mcp-chrome](https://github.com/hangwin/mcp-chrome)，保留其版权声明。
+[MIT](LICENSE)
