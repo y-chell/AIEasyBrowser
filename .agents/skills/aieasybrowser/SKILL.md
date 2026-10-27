@@ -84,7 +84,24 @@ This CLI drives the user's real Chrome: real profile, real cookies, `navigator.w
 
 Do not reach for fingerprint spoofing. The session is already genuine; patching `navigator`, `canvas`, or `toString` downgrades a real fingerprint into a detectable fake.
 
-**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame whose container has a real bounding box while the main document sees nothing inside. Handle: click by coordinate with `chrome_computer`, verify by widget state, retry with `double_click` (see above).
+**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame whose container has a real bounding box while the main document sees nothing inside.
+
+For a checkbox, a bare click often does nothing: the widget wants a pointer that arrived from somewhere. `chrome_computer` sends one press/release pair with no preceding move, which reads as a teleport. Send a short move sequence instead, and bring the tab to the front first — a background tab is throttled and its input is not treated as real. The numbers below are the shape of the sequence, not fixed coordinates: derive `tx,ty` from the widget rect and start the move a few pixels up and to the left of it.
+
+```sh
+# rect = document.querySelector(".cf-turnstile").getBoundingClientRect()
+# tx = rect.x + 24, ty = rect.y + rect.height / 2   (checkbox centre, CSS px)
+aieasybrowser --session task call chrome_cdp_batch '{"tabId":123,"bringToFront":true,"commands":[
+  {"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":252,"y":522,"button":"none","buttons":0}},
+  {"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":260,"y":529,"button":"none","buttons":0}},
+  {"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":266,"y":533,"button":"none","buttons":0}},
+  {"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":270,"y":535,"button":"none","buttons":0}},
+  {"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":270,"y":535,"button":"left","buttons":1,"clickCount":1}},
+  {"method":"Input.dispatchMouseEvent","params":{"type":"mouseReleased","x":270,"y":535,"button":"left","buttons":0,"clickCount":1}}
+]}'
+```
+
+Confirmed on Cloudflare Turnstile after a plain `left_click` and a `double_click` both left the token empty; this sequence filled it. Verify from the hidden field, not the click: `document.querySelector("[name=cf-turnstile-response]").value.length > 0` (a solved token is several hundred characters).
 
 For a slider, the offset tells you where to end, but the trajectory decides whether it passes. Move in several `mouseMoved` steps with varying gaps, overshoot slightly, then correct — a single jump to the end fails even at the correct distance. Read the offset from the puzzle image if you can (the gap is the dominant vertical discontinuity), and treat that number as a target to approach, not a value to trust blindly; some variants randomize the picture between the render and the check.
 
