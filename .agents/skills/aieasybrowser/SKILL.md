@@ -73,11 +73,22 @@ Cross-origin widgets render inside iframes the main document cannot see. `Page.g
 
 ## Bot checks and signature parameters
 
-This CLI drives the user's real Chrome: real profile, real cookies, `navigator.webdriver === false`, real GPU and fonts. That removes most of the fingerprint work that headless setups have to fake. When a page still blocks, classify it first — the three kinds need different handling.
+This CLI drives the user's real Chrome: real profile, real cookies, `navigator.webdriver === false`, real GPU and fonts. That removes most of the fingerprint work that headless setups have to fake. Start from that advantage.
 
-**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame whose container has a real bounding box while the main document sees nothing inside. Handle: click by coordinate with `chrome_computer`, verify by widget state, retry with `double_click` (see above). Never try to compute a slider offset from the picture — the widget's own JS validates the trajectory.
+**Try the boring thing first.** Most blocks on a real logged-in profile clear with behaviour a real user would perform, before any analysis is needed:
 
-Frame hostnames and cookies that identify the common vendors, with the shape each one takes. `widget` means type 1 (click it), `silent` means type 2 (it runs without a widget; clicking will not help):
+1. Open the target URL in the already-running profile instead of a fresh context, so cookies and the site's own storage are present.
+2. Navigate with `open <url>` and let the page settle; many checks only need their own JS to finish. Wait for a page signal, not a fixed sleep.
+3. If a widget appears, click it as a user would. If the page reloads into a challenge after a navigation, the same session often passes on a second visit because the cookie is now set.
+4. Only when that fails, start classifying — the three kinds below need different handling.
+
+Do not reach for fingerprint spoofing. The session is already genuine; patching `navigator`, `canvas`, or `toString` downgrades a real fingerprint into a detectable fake.
+
+**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame whose container has a real bounding box while the main document sees nothing inside. Handle: click by coordinate with `chrome_computer`, verify by widget state, retry with `double_click` (see above).
+
+For a slider, the offset tells you where to end, but the trajectory decides whether it passes. Move in several `mouseMoved` steps with varying gaps, overshoot slightly, then correct — a single jump to the end fails even at the correct distance. Read the offset from the puzzle image if you can (the gap is the dominant vertical discontinuity), and treat that number as a target to approach, not a value to trust blindly; some variants randomize the picture between the render and the check.
+
+Vendor markers below tell you which widget you are facing and whether it has one at all. `widget` means type 1 (click/drag it), `silent` means type 2 (it runs without a widget; clicking will not help):
 
 | Vendor              | Marker                              | Shape                                      |
 | ------------------- | ----------------------------------- | ------------------------------------------ |
@@ -106,7 +117,7 @@ Hostnames in this table were checked to resolve; cookies and global names are th
 aieasybrowser --session task eval 'return {webdriver: navigator.webdriver, ua: navigator.userAgent.slice(0,60), langs: navigator.languages.join(","), dpr: devicePixelRatio, tz: Intl.DateTimeFormat().resolvedOptions().timeZone}'
 ```
 
-If `navigator.webdriver` is `true`, something in the launch path added automation flags — that is the first thing to fix, and it is not fixable from page JavaScript. Do not patch `navigator` properties to "pass" the check: real detection reads native function `toString()` and the property-descriptor chain, so a patched getter is a stronger signal than the value it returns.
+If `navigator.webdriver` is `true`, something in the launch path added automation flags — that is the first thing to fix, and it is not fixable from page JavaScript.
 
 **3. Algorithmic signature** — the site signs every request with JS that runs on their page (`bx-ua`, `h5st`, `X-Bogus`, `_signature`, similar). Detect: the request fails with a signature/auth error while the page itself loads fine. Handle: call the site's own function instead of reimplementing it — the page already has a working implementation loaded.
 
