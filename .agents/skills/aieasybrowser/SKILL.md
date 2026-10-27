@@ -86,11 +86,18 @@ Do not reach for fingerprint spoofing. The session is already genuine; patching 
 
 **1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame whose container has a real bounding box while the main document sees nothing inside.
 
-For a checkbox, a bare click often does nothing: the widget wants a pointer that arrived from somewhere. `chrome_computer` sends one press/release pair with no preceding move, which reads as a teleport. Send a short move sequence instead, and bring the tab to the front first — a background tab is throttled and its input is not treated as real. The numbers below are the shape of the sequence, not fixed coordinates: derive `tx,ty` from the widget rect and start the move a few pixels up and to the left of it.
+For a checkbox, a bare click often does nothing: the widget wants a pointer that arrived from somewhere. `chrome_computer` sends one press/release pair with no preceding move, which reads as a teleport. Send a short move sequence instead, and bring the tab to the front first — a background tab is throttled and its input is not treated as real.
+
+Locate the box without assuming a class name. Many sites wrap Turnstile in their own component, so `.cf-turnstile` matches nothing while the widget still renders. Do not hunt for the frame with `document.querySelectorAll("iframe")` either: on a tested site the Turnstile frame was reported by `chrome_list_frames` but was absent from that NodeList, so the query returns "not found" while the widget is visibly there. Probe the point you see in the screenshot instead:
 
 ```sh
-# rect = document.querySelector(".cf-turnstile").getBoundingClientRect()
-# tx = rect.x + 24, ty = rect.y + rect.height / 2   (checkbox centre, CSS px)
+# screptPoint = the checkbox in the saved PNG; divide by devicePixelRatio for CSS px
+aieasybrowser --session task eval 'const els = document.elementsFromPoint(964, 590); return els.slice(0,3).map((e) => { const r = e.getBoundingClientRect(); return {tag: e.tagName, w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.x), y: Math.round(r.y)}; })'
+```
+
+The widget box is the entry with a plausible size (roughly 300–420 wide, ~70 tall). The checkbox sits near its left edge: `tx = rect.x + 24`, `ty = rect.y + rect.height / 2`. The command below uses placeholder numbers — substitute your own:
+
+```sh
 aieasybrowser --session task call chrome_cdp_batch '{"tabId":123,"bringToFront":true,"commands":[
   {"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":252,"y":522,"button":"none","buttons":0}},
   {"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":260,"y":529,"button":"none","buttons":0}},
@@ -101,7 +108,7 @@ aieasybrowser --session task call chrome_cdp_batch '{"tabId":123,"bringToFront":
 ]}'
 ```
 
-Confirmed on Cloudflare Turnstile after a plain `left_click` and a `double_click` both left the token empty; this sequence filled it. Verify from the hidden field, not the click: `document.querySelector("[name=cf-turnstile-response]").value.length > 0` (a solved token is several hundred characters).
+Confirmed twice on Cloudflare Turnstile: on a page where a plain `left_click` and a `double_click` both left the token empty, and on a second site whose widget used a different container class (no `.cf-turnstile` in the DOM). Both filled the token on the first sequence. Verify from the hidden field, not the click: `document.querySelector("[name=cf-turnstile-response]").value.length > 0` (a solved token is several hundred characters).
 
 For a slider, the offset tells you where to end, but the trajectory decides whether it passes. Move in several `mouseMoved` steps with varying gaps, overshoot slightly, then correct — a single jump to the end fails even at the correct distance. Read the offset from the puzzle image if you can (the gap is the dominant vertical discontinuity), and treat that number as a target to approach, not a value to trust blindly; some variants randomize the picture between the render and the check.
 
