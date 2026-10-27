@@ -192,6 +192,17 @@ const handleToolCall = async (
 ): Promise<CallToolResult> => {
   try {
     throwIfAborted(execution.signal);
+    const tool = TOOL_SCHEMAS.find((item) => item.name === name);
+    if (!tool) throw new Error(`Unknown browser tool: ${name}`);
+    if (tool.inputSchema.additionalProperties === false) {
+      const properties = tool.inputSchema.properties ?? {};
+      const unexpected = Object.keys(args).filter(
+        (key) => !Object.prototype.hasOwnProperty.call(properties, key),
+      );
+      if (unexpected.length > 0) {
+        throw new Error(`Unknown parameter(s) for ${name}: ${unexpected.join(', ')}`);
+      }
+    }
     const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
       {
         name,

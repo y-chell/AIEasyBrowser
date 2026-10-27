@@ -11,7 +11,7 @@ jest.mock('../native-messaging-host', () => ({
 type RequestHandler = (request?: any, extra?: any) => Promise<any>;
 const sendRequest = nativeMessagingHostInstance.sendRequestToExtensionAndWait as jest.Mock;
 
-function createServerHarness() {
+function createServerHarness(toolProfile: 'full' | 'core' | 'search' = 'full') {
   const handlers: RequestHandler[] = [];
   const server = {
     registerCapabilities: jest.fn(),
@@ -19,7 +19,7 @@ function createServerHarness() {
       handlers.push(handler),
     ),
   };
-  setupTools(server as any, { toolProfile: 'full' });
+  setupTools(server as any, { toolProfile });
   return { server, listTools: handlers[0], callTool: handlers[1] };
 }
 
@@ -76,5 +76,73 @@ describe('browser tool dispatch', () => {
       expect.any(Number),
       expect.objectContaining({ signal: controller.signal }),
     );
+  });
+
+  test.each(['start', 'stop'])(
+    'rejects undeclared network %s parameters before browser dispatch',
+    async (action) => {
+      const { callTool } = createServerHarness();
+      const failed = await callTool(
+        {
+          params: { name: 'chrome_network_capture', arguments: { action, tabId: 7 } },
+        },
+        {},
+      );
+      expect(failed.isError).toBe(true);
+      expect(failed.content[0].text).toContain(
+        'Unknown parameter(s) for chrome_network_capture: tabId',
+      );
+      expect(sendRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  test('allows the documented network arguments without changing them', async () => {
+    sendRequest.mockResolvedValueOnce({ status: 'success', data: { content: [] } });
+    const { callTool } = createServerHarness();
+    const args = {
+      action: 'start',
+      url: 'https://fixture.test/*',
+      includeStatic: false,
+      inactivityTimeout: 0,
+    };
+    const result = await callTool(
+      { params: { name: 'chrome_network_capture', arguments: args } },
+      {},
+    );
+    expect(result.isError).not.toBe(true);
+    expect(sendRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'chrome_network_capture', args }),
+      NativeMessageType.CALL_TOOL,
+      expect.any(Number),
+      expect.any(Object),
+    );
+  });
+
+  test('also rejects undeclared arguments when invoked through the search profile', async () => {
+    const { callTool } = createServerHarness('search');
+    const failed = await callTool(
+      {
+        params: {
+          name: 'chrome_call_tool',
+          arguments: {
+            name: 'chrome_network_capture',
+            args: { action: 'start', tabId: 7 },
+          },
+        },
+      },
+      {},
+    );
+    expect(failed.isError).toBe(true);
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+
+  test('rejects an unknown browser tool before extension IO', async () => {
+    const { callTool } = createServerHarness();
+    const failed = await callTool(
+      { params: { name: 'chrome_nonexistent_tool', arguments: {} } },
+      {},
+    );
+    expect(failed.content[0].text).toContain('Unknown browser tool: chrome_nonexistent_tool');
+    expect(sendRequest).not.toHaveBeenCalled();
   });
 });

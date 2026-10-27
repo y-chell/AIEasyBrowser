@@ -7,6 +7,7 @@ import { MessageTarget, OFFSCREEN_MESSAGE_TYPES } from '@/common/message-types';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { offscreenManager } from '@/utils/offscreen-manager';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 
 type ClipboardAction = 'read_text' | 'write_text' | 'paste_text' | 'copy_selection';
 type SelectorType = 'css' | 'xpath';
@@ -28,9 +29,6 @@ interface ClipboardOffscreenResponse {
   error?: string;
 }
 
-type ClipboardReadSource = 'page-navigator' | 'offscreen';
-type ClipboardWriteSource = 'page-navigator' | 'offscreen' | 'page-exec-command';
-
 function jsonSuccess(payload: Record<string, unknown>): ToolResult {
   return createStructuredToolResult(payload);
 }
@@ -40,13 +38,17 @@ async function sendClipboardMessage(
     | typeof OFFSCREEN_MESSAGE_TYPES.CLIPBOARD_READ_TEXT
     | typeof OFFSCREEN_MESSAGE_TYPES.CLIPBOARD_WRITE_TEXT,
   payload: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<ClipboardOffscreenResponse> {
+  signal?.throwIfAborted();
   await offscreenManager.ensureOffscreenDocument();
+  signal?.throwIfAborted();
   const response = (await chrome.runtime.sendMessage({
     target: MessageTarget.Offscreen,
     type,
     ...payload,
   })) as ClipboardOffscreenResponse | undefined;
+  signal?.throwIfAborted();
   if (!response) return { success: false, error: 'No response from offscreen clipboard handler' };
   return response;
 }
@@ -60,18 +62,6 @@ function buildInjectionTarget(tabId: number, frameId?: number): chrome.scripting
   const frameIds = pickFrameIds(frameId);
   if (frameIds) target.frameIds = frameIds;
   return target;
-}
-
-function isScriptablePageUrl(url?: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'file:'
-    );
-  } catch {
-    return false;
-  }
 }
 
 class ClipboardTool extends BaseBrowserToolExecutor {
@@ -103,228 +93,36 @@ class ClipboardTool extends BaseBrowserToolExecutor {
     }
   }
 
-  private async tryGetTargetTab(args: ClipboardToolParams): Promise<chrome.tabs.Tab | null> {
-    try {
-      return await this.getTargetTab(args);
-    } catch {
-      return null;
-    }
-  }
-
-  private async writeTextViaOffscreen(text: string): Promise<'offscreen'> {
-    const response = await sendClipboardMessage(OFFSCREEN_MESSAGE_TYPES.CLIPBOARD_WRITE_TEXT, {
-      text,
-    });
-    if (response.success) return 'offscreen';
-    throw new Error(response.error || 'Clipboard write failed');
-  }
-
-  private async readTextViaOffscreen(): Promise<{ text: string; source: 'offscreen' }> {
-    const response = await sendClipboardMessage(OFFSCREEN_MESSAGE_TYPES.CLIPBOARD_READ_TEXT);
+  private async readText(signal?: AbortSignal): Promise<{ text: string; source: 'offscreen' }> {
+    const response = await sendClipboardMessage(
+      OFFSCREEN_MESSAGE_TYPES.CLIPBOARD_READ_TEXT,
+      {},
+      signal,
+    );
     if (!response.success) throw new Error(response.error || 'Clipboard read failed');
     return { text: String(response.text ?? ''), source: 'offscreen' };
   }
 
-  private async readTextViaFocusedPage(
-    args: ClipboardToolParams,
-  ): Promise<{ text: string; source: 'page-navigator' }> {
-    const tab = await this.tryGetTargetTab(args);
-    if (!tab?.id) throw new Error('No scriptable target tab found for page clipboard read');
-    if (!isScriptablePageUrl(tab.url)) {
-      throw new Error(`Page clipboard read is not supported on this URL: ${tab.url || 'unknown'}`);
-    }
-
-    await this.ensureFocus(tab, { activate: true, focusWindow: true });
-
-    const [result] = await chrome.scripting.executeScript({
-      target: buildInjectionTarget(tab.id),
-      world: 'MAIN',
-      func: async () => {
-        if (!navigator.clipboard?.readText) {
-          return {
-            success: false,
-            error: 'navigator.clipboard.readText is unavailable in this page context',
-          };
-        }
-
-        try {
-          const text = await navigator.clipboard.readText();
-          return {
-            success: true,
-            text,
-            focused: document.hasFocus(),
-          };
-        } catch (error) {
-          return {
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-            focused: document.hasFocus(),
-          };
-        }
-      },
-    });
-
-    const payload = result?.result as
-      | { success?: boolean; text?: string; error?: string; focused?: boolean }
-      | undefined;
-    if (!payload?.success) {
-      throw new Error(payload?.error || 'Page clipboard read failed');
-    }
-    return { text: String(payload.text ?? ''), source: 'page-navigator' };
+  private async writeText(text: string, signal?: AbortSignal): Promise<'offscreen'> {
+    const response = await sendClipboardMessage(
+      OFFSCREEN_MESSAGE_TYPES.CLIPBOARD_WRITE_TEXT,
+      { text },
+      signal,
+    );
+    if (!response.success) throw new Error(response.error || 'Clipboard write failed');
+    return 'offscreen';
   }
 
-  private async writeTextViaFocusedPage(
+  private async pasteText(
     args: ClipboardToolParams,
     text: string,
-  ): Promise<'page-navigator'> {
-    const tab = await this.tryGetTargetTab(args);
-    if (!tab?.id) throw new Error('No scriptable target tab found for page clipboard write');
-    if (!isScriptablePageUrl(tab.url)) {
-      throw new Error(`Page clipboard write is not supported on this URL: ${tab.url || 'unknown'}`);
-    }
-
-    await this.ensureFocus(tab, { activate: true, focusWindow: true });
-
-    const [result] = await chrome.scripting.executeScript({
-      target: buildInjectionTarget(tab.id),
-      world: 'MAIN',
-      func: async (value: string) => {
-        if (!navigator.clipboard?.writeText) {
-          return {
-            success: false,
-            error: 'navigator.clipboard.writeText is unavailable in this page context',
-          };
-        }
-
-        try {
-          await navigator.clipboard.writeText(value);
-          return {
-            success: true,
-            focused: document.hasFocus(),
-          };
-        } catch (error) {
-          return {
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-            focused: document.hasFocus(),
-          };
-        }
-      },
-      args: [text],
-    });
-
-    const payload = result?.result as { success?: boolean; error?: string } | undefined;
-    if (!payload?.success) {
-      throw new Error(payload?.error || 'Page clipboard write failed');
-    }
-    return 'page-navigator';
-  }
-
-  private async writeTextViaExecCommand(
-    args: ClipboardToolParams,
-    text: string,
-  ): Promise<'page-exec-command'> {
-    const tab = await this.getTargetTab(args);
-    if (!tab.id) throw new Error('Target tab has no ID');
-    if (!isScriptablePageUrl(tab.url)) {
-      throw new Error(
-        `execCommand clipboard fallback is not supported on this URL: ${tab.url || 'unknown'}`,
-      );
-    }
-
-    await this.ensureFocus(tab, { activate: true, focusWindow: true });
-
-    const [result] = await chrome.scripting.executeScript({
-      target: buildInjectionTarget(tab.id, args.frameId),
-      world: 'MAIN',
-      func: (value: string) => {
-        const textarea = document.createElement('textarea');
-        textarea.value = value;
-        textarea.style.position = 'fixed';
-        textarea.style.left = '-9999px';
-        textarea.style.top = '-9999px';
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        try {
-          const copied = document.execCommand('copy');
-          return {
-            success: copied,
-            error: copied ? undefined : 'document.execCommand("copy") returned false',
-            focused: document.hasFocus(),
-          };
-        } finally {
-          textarea.remove();
-        }
-      },
-      args: [text],
-    });
-    const payload = result?.result as { success?: boolean; error?: string } | undefined;
-    if (!payload?.success) {
-      throw new Error(payload?.error || 'Clipboard page execCommand fallback failed');
-    }
-    return 'page-exec-command';
-  }
-
-  private async readText(args: ClipboardToolParams): Promise<{
-    text: string;
-    source: ClipboardReadSource;
-    fallbackError?: string;
-  }> {
-    try {
-      return await this.readTextViaFocusedPage(args);
-    } catch (pageError) {
-      const pageErrorMessage = pageError instanceof Error ? pageError.message : String(pageError);
-      try {
-        const offscreen = await this.readTextViaOffscreen();
-        return { ...offscreen, fallbackError: pageErrorMessage };
-      } catch (offscreenError) {
-        const offscreenErrorMessage =
-          offscreenError instanceof Error ? offscreenError.message : String(offscreenError);
-        throw new Error(
-          `Clipboard read failed: page=${pageErrorMessage}; offscreen=${offscreenErrorMessage}`,
-        );
-      }
-    }
-  }
-
-  private async writeTextWithFallback(
-    args: ClipboardToolParams,
-    text: string,
-  ): Promise<{
-    source: ClipboardWriteSource;
-    fallbackErrors: string[];
-  }> {
-    const fallbackErrors: string[] = [];
-
-    try {
-      const source = await this.writeTextViaFocusedPage(args, text);
-      return { source, fallbackErrors };
-    } catch (error) {
-      fallbackErrors.push(error instanceof Error ? error.message : String(error));
-    }
-
-    try {
-      const source = await this.writeTextViaOffscreen(text);
-      return { source, fallbackErrors };
-    } catch (error) {
-      fallbackErrors.push(error instanceof Error ? error.message : String(error));
-    }
-
-    try {
-      const source = await this.writeTextViaExecCommand(args, text);
-      return { source, fallbackErrors };
-    } catch (error) {
-      fallbackErrors.push(error instanceof Error ? error.message : String(error));
-    }
-
-    throw new Error(`Clipboard write failed: ${fallbackErrors.join('; ')}`);
-  }
-
-  private async pasteText(args: ClipboardToolParams, text: string): Promise<ToolResult> {
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
+    signal?.throwIfAborted();
     const tab = await this.getTargetTab(args);
     if (!tab.id) return createErrorResponse('Target tab has no ID');
     if (args.ref) await this.focusTargetByRef(tab.id, args);
+    signal?.throwIfAborted();
 
     const [result] = await chrome.scripting.executeScript({
       target: buildInjectionTarget(tab.id, args.frameId),
@@ -426,6 +224,7 @@ class ClipboardTool extends BaseBrowserToolExecutor {
       ],
     });
 
+    signal?.throwIfAborted();
     const payload = result?.result as
       | { success?: boolean; error?: string; inserted?: boolean; target?: string; method?: string }
       | undefined;
@@ -440,10 +239,15 @@ class ClipboardTool extends BaseBrowserToolExecutor {
     });
   }
 
-  private async copySelection(args: ClipboardToolParams): Promise<ToolResult> {
+  private async copySelection(
+    args: ClipboardToolParams,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
+    signal?.throwIfAborted();
     const tab = await this.getTargetTab(args);
     if (!tab.id) return createErrorResponse('Target tab has no ID');
     if (args.ref) await this.focusTargetByRef(tab.id, args);
+    signal?.throwIfAborted();
 
     const [result] = await chrome.scripting.executeScript({
       target: buildInjectionTarget(tab.id, args.frameId),
@@ -481,6 +285,7 @@ class ClipboardTool extends BaseBrowserToolExecutor {
       args: [{ selector: args.selector, selectorType: args.selectorType || 'css' }],
     });
 
+    signal?.throwIfAborted();
     const payload = result?.result as
       | { success?: boolean; error?: string; text?: string; source?: string }
       | undefined;
@@ -488,7 +293,7 @@ class ClipboardTool extends BaseBrowserToolExecutor {
 
     const text = String(payload.text || '');
     try {
-      const write = await this.writeTextWithFallback(args, text);
+      const source = await this.writeText(text, signal);
       return jsonSuccess({
         success: true,
         action: 'copy_selection',
@@ -496,10 +301,10 @@ class ClipboardTool extends BaseBrowserToolExecutor {
         length: text.length,
         source: payload.source,
         clipboardWritten: true,
-        clipboardTransport: write.source,
-        clipboardFallbackErrors: write.fallbackErrors,
+        clipboardTransport: source,
       });
     } catch (error) {
+      signal?.throwIfAborted();
       return jsonSuccess({
         success: true,
         partialSuccess: true,
@@ -513,44 +318,47 @@ class ClipboardTool extends BaseBrowserToolExecutor {
     }
   }
 
-  async execute(args: ClipboardToolParams): Promise<ToolResult> {
+  async execute(
+    args: ClipboardToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
     const action = args?.action;
     if (!action) return createErrorResponse('action is required');
 
     try {
+      const signal = executionContext?.signal;
+      signal?.throwIfAborted();
       switch (action) {
         case 'read_text': {
-          const read = await this.readText(args);
+          const read = await this.readText(signal);
           return jsonSuccess({
             success: true,
             action,
             text: read.text,
             length: read.text.length,
             clipboardTransport: read.source,
-            clipboardFallbackError: read.fallbackError,
           });
         }
         case 'write_text': {
           if (typeof args.text !== 'string') return createErrorResponse('text is required');
-          const write = await this.writeTextWithFallback(args, args.text);
+          const source = await this.writeText(args.text, signal);
           return jsonSuccess({
             success: true,
             action,
             length: args.text.length,
-            clipboardTransport: write.source,
-            clipboardFallbackErrors: write.fallbackErrors,
+            clipboardTransport: source,
           });
         }
         case 'paste_text': {
-          const read = typeof args.text === 'string' ? undefined : await this.readText(args);
+          const read = typeof args.text === 'string' ? undefined : await this.readText(signal);
           const text = typeof args.text === 'string' ? args.text : read!.text;
           if (typeof args.text === 'string') {
-            await this.writeTextWithFallback(args, text).catch(() => undefined);
+            await this.writeText(text, signal);
           }
-          return await this.pasteText(args, text);
+          return await this.pasteText(args, text, signal);
         }
         case 'copy_selection':
-          return await this.copySelection(args);
+          return await this.copySelection(args, signal);
         default:
           return createErrorResponse(`Unsupported clipboard action: ${action}`);
       }

@@ -170,8 +170,10 @@ async function rememberSessionTarget(
   sessionId: string,
   target: Partial<BrowserSessionBinding>,
   source: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const tab = await getTab(target.tabId);
+  throwIfAborted(signal);
   if (tab?.id) {
     sessionBindings.set(sessionId, {
       tabId: tab.id,
@@ -183,6 +185,7 @@ async function rememberSessionTarget(
   }
 
   const window = await getWindow(target.windowId);
+  throwIfAborted(signal);
   if (window?.id) {
     sessionBindings.set(sessionId, {
       windowId: window.id,
@@ -198,8 +201,12 @@ function shouldPinInitialActiveTab(toolName: string, args: Record<string, any>):
   return true;
 }
 
-async function getStoredBinding(sessionId: string): Promise<BrowserSessionBinding | null> {
+async function getStoredBinding(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<BrowserSessionBinding | null> {
   const existing = await validateBinding(sessionBindings.get(sessionId));
+  throwIfAborted(signal);
   if (!existing) {
     sessionBindings.delete(sessionId);
     return null;
@@ -212,6 +219,7 @@ async function prepareToolArgs(
   toolName: string,
   rawArgs: any,
   context?: BrowserToolCallContext,
+  signal?: AbortSignal,
 ): Promise<PreparedToolCall> {
   const args = isPlainObject(rawArgs) ? { ...rawArgs } : {};
   const sessionId = normalizeSessionId(context);
@@ -223,16 +231,21 @@ async function prepareToolArgs(
   const explicitWindowId = asFiniteNumber(args.windowId);
 
   if (typeof explicitTabId === 'number') {
-    await rememberSessionTarget(sessionId, { tabId: explicitTabId }, 'explicit-tab');
+    await rememberSessionTarget(sessionId, { tabId: explicitTabId }, 'explicit-tab', signal);
     return { args, bindingBeforeCall: sessionBindings.get(sessionId) };
   }
 
   if (typeof explicitWindowId === 'number') {
-    await rememberSessionTarget(sessionId, { windowId: explicitWindowId }, 'explicit-window');
+    await rememberSessionTarget(
+      sessionId,
+      { windowId: explicitWindowId },
+      'explicit-window',
+      signal,
+    );
     return { args, bindingBeforeCall: sessionBindings.get(sessionId) };
   }
 
-  const binding = await getStoredBinding(sessionId);
+  const binding = await getStoredBinding(sessionId, signal);
 
   if (toolName === CLOSE_TABS_TOOL) {
     if (!args.tabIds && !args.url && typeof binding?.tabId === 'number') {
@@ -332,6 +345,7 @@ async function finalizeToolCall(
   toolName: string,
   prepared: PreparedToolCall,
   result: ToolResult,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!sessionId || !SESSION_AWARE_TOOLS.has(toolName)) return;
 
@@ -348,7 +362,7 @@ async function finalizeToolCall(
   ) {
     const target = extractTargetFromPayload(payload);
     if (target?.tabId || target?.windowId) {
-      await rememberSessionTarget(sessionId, target, 'close-tabs-result');
+      await rememberSessionTarget(sessionId, target, 'close-tabs-result', signal);
     } else {
       sessionBindings.delete(sessionId);
     }
@@ -373,12 +387,17 @@ async function finalizeToolCall(
     return;
   }
   if (target?.tabId || target?.windowId) {
-    await rememberSessionTarget(sessionId, target, 'tool-result');
+    await rememberSessionTarget(sessionId, target, 'tool-result', signal);
     return;
   }
 
   if (prepared.initialTarget?.tabId || prepared.initialTarget?.windowId) {
-    await rememberSessionTarget(sessionId, prepared.initialTarget, 'initial-target-success');
+    await rememberSessionTarget(
+      sessionId,
+      prepared.initialTarget,
+      'initial-target-success',
+      signal,
+    );
   }
 }
 
@@ -393,17 +412,29 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortReason(signal);
 }
 
-async function waitForQueue(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+async function waitForCompletion<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) {
-    await previous;
-    return;
+    return pending;
   }
 
-  throwIfAborted(signal);
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
     signal.addEventListener('abort', onAbort, { once: true });
-    previous.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    pending.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+    if (signal.aborted) onAbort();
   });
 }
 
@@ -423,7 +454,7 @@ async function enqueue<T>(key: string, fn: () => Promise<T>, signal?: AbortSigna
   });
 
   try {
-    await waitForQueue(
+    await waitForCompletion(
       previous.catch(() => undefined),
       signal,
     );
@@ -484,7 +515,7 @@ export async function runBrowserToolCallWithIsolation(
   const sessionId = normalizeSessionId(context);
   const run = async () => {
     throwIfAborted(signal);
-    const prepared = await prepareToolArgs(toolName, rawArgs, context);
+    const prepared = await prepareToolArgs(toolName, rawArgs, context, signal);
     throwIfAborted(signal);
     return withQueues(
       getTargetQueueKeys(prepared.args),
@@ -492,7 +523,7 @@ export async function runBrowserToolCallWithIsolation(
         throwIfAborted(signal);
         const result = await execute(prepared.args, executionContext);
         throwIfAborted(signal);
-        await finalizeToolCall(sessionId, toolName, prepared, result);
+        await finalizeToolCall(sessionId, toolName, prepared, result, signal);
         throwIfAborted(signal);
         return result;
       },
@@ -500,7 +531,12 @@ export async function runBrowserToolCallWithIsolation(
     );
   };
 
-  return sessionId ? enqueue(`session:${sessionId}`, run, signal) : run();
+  // Cancellation frees the session, but target locks remain until execution actually settles.
+  const waitForRun = () => {
+    throwIfAborted(signal);
+    return waitForCompletion(run(), signal);
+  };
+  return sessionId ? enqueue(`session:${sessionId}`, waitForRun, signal) : waitForRun();
 }
 
 export function getBrowserToolSessionBinding(sessionId: string): BrowserSessionBinding | undefined {

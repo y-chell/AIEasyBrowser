@@ -3,14 +3,18 @@ import fs from 'fs';
 import path from 'path';
 import { writeNodePathFile } from './utils';
 
-const distDir = path.join(__dirname, '..', '..', 'dist');
+const distDir = path.resolve(__dirname, '..', '..', 'dist');
 // 清理上次构建
 console.log('清理上次构建...');
 try {
-  fs.rmSync(distDir, { recursive: true, force: true });
+  // Chrome may use dist as the host's working directory; keep the directory itself.
+  fs.mkdirSync(distDir, { recursive: true });
+  for (const entry of fs.readdirSync(distDir)) {
+    fs.rmSync(path.join(distDir, entry), { recursive: true, force: true });
+  }
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
-  throw new Error(`无法清理旧的 dist 目录。请先停止 Native Server/Chrome 连接后重试: ${message}`);
+  throw new Error(`无法清理旧的构建产物 (${distDir}): ${message}`);
 }
 
 // 创建dist目录

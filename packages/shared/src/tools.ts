@@ -579,7 +579,7 @@ const RAW_TOOL_SCHEMAS: Tool[] = [
   {
     name: TOOL_NAMES.BROWSER.CLIPBOARD,
     description:
-      'Read, write, copy, or paste text through the browser clipboard/page. Uses focused page clipboard APIs first when possible, then offscreen/fallback paths.',
+      'Read and write the system clipboard through the extension offscreen document, without website clipboard permission prompts. Copy or paste text in a target page.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1064,7 +1064,8 @@ const RAW_TOOL_SCHEMAS: Tool[] = [
         },
         url: {
           type: 'string',
-          description: 'Close tabs matching this URL. Can be used instead of tabIds.',
+          description:
+            'Close tabs with this exact URL, including query and hash. A value containing "*" is a Chrome URL match pattern. Can be used instead of tabIds.',
         },
       },
       required: [],
