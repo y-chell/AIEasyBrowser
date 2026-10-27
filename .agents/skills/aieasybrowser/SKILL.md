@@ -75,7 +75,30 @@ Cross-origin widgets render inside iframes the main document cannot see. `Page.g
 
 This CLI drives the user's real Chrome: real profile, real cookies, `navigator.webdriver === false`, real GPU and fonts. That removes most of the fingerprint work that headless setups have to fake. When a page still blocks, classify it first — the three kinds need different handling.
 
-**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame (`challenges.cloudflare.com`, `*.geetest.com`, `*.yidun.com`, `*.shumei.com`, `turing.captcha.*`) whose container has a real bounding box while the main document sees nothing inside. Handle: click by coordinate with `chrome_computer`, verify by widget state, retry with `double_click` (see above). Never try to compute a slider offset from the picture — the widget's own JS validates the trajectory.
+**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame whose container has a real bounding box while the main document sees nothing inside. Handle: click by coordinate with `chrome_computer`, verify by widget state, retry with `double_click` (see above). Never try to compute a slider offset from the picture — the widget's own JS validates the trajectory.
+
+Frame hostnames and cookies that identify the common vendors, with the shape each one takes. `widget` means type 1 (click it), `silent` means type 2 (it runs without a widget; clicking will not help):
+
+| Vendor              | Marker                              | Shape                                      |
+| ------------------- | ----------------------------------- | ------------------------------------------ |
+| Cloudflare          | `challenges.cloudflare.com`         | widget (checkbox / managed / interstitial) |
+| hCaptcha            | `js.hcaptcha.com`                   | widget (checkbox + image grid)             |
+| reCAPTCHA           | `www.google.com/recaptcha`          | widget (checkbox, invisible badge)         |
+| GeeTest             | `static.geetest.com`                | widget (slide-to-fit, icon ordering, 无感) |
+| Tencent 天御        | `turing.captcha.qcloud.com`         | widget (无感 + slider)                     |
+| NetEase 易盾        | `cstaticdun.126.net`                | widget (intelligent slider)                |
+| Shumei 数美         | `castatic.fengkongcloud.cn`         | widget (slider)                            |
+| Aliyun 滑块         | `cf.aliyun.com`                     | widget (puzzle / slider)                   |
+| Dingxiang           | `cap.dingxiang-inc.com`             | widget (slider / click-word)               |
+| Akamai              | `_abck` cookie, `/akam/` path       | silent sensor                              |
+| Arkose / iovation   | `client-api.arkoselabs.com`         | widget (tile rotation)                     |
+| DataDome            | `datadome` cookie, `ct.datadome.co` | silent, then interstitial                  |
+| PerimeterX / HUMAN  | `_px` cookies                       | silent, then press-and-hold                |
+| Imperva / Incapsula | `incap_ses` cookie                  | silent, then interstitial                  |
+| Kasada              | `kpsdk` globals                     | silent proof-of-work                       |
+| AWS WAF             | `aws-waf-token` cookie              | widget (puzzle)                            |
+
+Hostnames in this table were checked to resolve; cookies and global names are the stable markers when the SDK loads from a rotating CDN. Seen one of these markers but the page shows no widget? Treat it as type 2 and look for the generated token instead of hunting for something to click.
 
 **2. Silent environment check** — no visible widget, but the request carries a token the page generated, or the page redirects you away. Detect: inspect what the page computes rather than guessing. Look for a hidden field, a request header, or a global.
 
