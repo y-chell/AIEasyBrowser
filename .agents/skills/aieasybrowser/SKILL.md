@@ -88,14 +88,19 @@ Do not reach for fingerprint spoofing. The session is already genuine; patching 
 
 For a checkbox, a bare click often does nothing: the widget wants a pointer that arrived from somewhere. `chrome_computer` sends one press/release pair with no preceding move, which reads as a teleport. Send a short move sequence instead, and bring the tab to the front first — a background tab is throttled and its input is not treated as real.
 
-Locate the box without assuming a class name. Many sites wrap Turnstile in their own component, so `.cf-turnstile` matches nothing while the widget still renders. Do not hunt for the frame with `document.querySelectorAll("iframe")` either: on a tested site the Turnstile frame was reported by `chrome_list_frames` but was absent from that NodeList, so the query returns "not found" while the widget is visibly there. Probe the point you see in the screenshot instead:
+Locate the box without assuming a class name. Many sites wrap Turnstile in their own component, so `.cf-turnstile` matches nothing while the widget still renders. Do not hunt for the frame with `document.querySelectorAll("iframe")` either: on a tested site the Turnstile frame was reported by `chrome_list_frames` but was absent from that NodeList, so the query returns "not found" while the widget is visibly there.
+
+Take the coordinate from the picture you are looking at, not from a container you picked by class or size. A container search returns whatever matched, which may be a stale rect, an outer wrapper, or one of several same-sized divs — that is how a click lands 100px below the checkbox while every step "looks" correct. The reliable order is: screenshot → read the checkbox pixel → divide by `devicePixelRatio` → probe that exact point:
 
 ```sh
-# screptPoint = the checkbox in the saved PNG; divide by devicePixelRatio for CSS px
+# 1. screenshot, note where the checkbox is IN THE PNG
+aieasybrowser --session task call chrome_screenshot '{"savePng":true,"name":"challenge"}'
+
+# 2. probe that point in CSS px (pngX / devicePixelRatio, pngY / devicePixelRatio)
 aieasybrowser --session task eval 'const els = document.elementsFromPoint(964, 590); return els.slice(0,3).map((e) => { const r = e.getBoundingClientRect(); return {tag: e.tagName, w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.x), y: Math.round(r.y)}; })'
 ```
 
-The widget box is the entry with a plausible size (roughly 300–420 wide, ~70 tall). The checkbox sits near its left edge: `tx = rect.x + 24`, `ty = rect.y + rect.height / 2`. The command below uses placeholder numbers — substitute your own:
+The widget box is the entry with a plausible size (roughly 300–420 wide, ~70 tall). The checkbox sits near its left edge: `tx = rect.x + 24`, `ty = rect.y + rect.height / 2`. If the probed point already is the checkbox centre, use it unchanged — that is the shortest path and avoids the rect arithmetic entirely. The command below uses placeholder numbers — substitute your own:
 
 ```sh
 aieasybrowser --session task call chrome_cdp_batch '{"tabId":123,"bringToFront":true,"commands":[
@@ -109,6 +114,8 @@ aieasybrowser --session task call chrome_cdp_batch '{"tabId":123,"bringToFront":
 ```
 
 Confirmed twice on Cloudflare Turnstile: on a page where a plain `left_click` and a `double_click` both left the token empty, and on a second site whose widget used a different container class (no `.cf-turnstile` in the DOM). Both filled the token on the first sequence. Verify from the hidden field, not the click: `document.querySelector("[name=cf-turnstile-response]").value.length > 0` (a solved token is several hundred characters).
+
+If the sequence lands but the token stays empty, re-screenshot before anything else. The page may have scrolled between your screenshot and the click (a promo bar expanding, a cookie banner dismissing), which moves the widget in CSS space while your numbers stay put. Measure, click, verify — never measure once and fire several blind attempts at guessed offsets.
 
 For a slider, the offset tells you where to end, but the trajectory decides whether it passes. Move in several `mouseMoved` steps with varying gaps, overshoot slightly, then correct — a single jump to the end fails even at the correct distance. Read the offset from the puzzle image if you can (the gap is the dominant vertical discontinuity), and treat that number as a target to approach, not a value to trust blindly; some variants randomize the picture between the render and the check.
 
