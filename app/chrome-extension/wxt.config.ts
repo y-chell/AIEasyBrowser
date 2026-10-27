@@ -85,6 +85,10 @@ export default defineConfig({
     host_permissions: ['<all_urls>'],
     action: {
       default_title: 'AIEasyBrowser',
+      default_icon: {
+        16: 'icon/16.png',
+        32: 'icon/32.png',
+      },
     },
     web_accessible_resources: [
       {

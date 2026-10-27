@@ -7,6 +7,6 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['entrypoints/**/*.test.ts'],
+    include: ['*.test.ts', 'entrypoints/**/*.test.ts'],
   },
 });
