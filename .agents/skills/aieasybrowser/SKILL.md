@@ -71,6 +71,37 @@ A single `left_click` is not always enough. Some widgets (Cloudflare Turnstile a
 
 Cross-origin widgets render inside iframes the main document cannot see. `Page.getFrameTree` may not list them while `chrome_list_frames` reports the frame ID and title, and `scan --frame <id>` can fail with `Frame documentId is unavailable`. None of that means the widget failed to render. If the container has a real bounding box, click it by coordinate.
 
+## Bot checks and signature parameters
+
+This CLI drives the user's real Chrome: real profile, real cookies, `navigator.webdriver === false`, real GPU and fonts. That removes most of the fingerprint work that headless setups have to fake. When a page still blocks, classify it first — the three kinds need different handling.
+
+**1. Interactive challenge** — a checkbox or slider in a visible widget. Detect: a cross-origin frame (`challenges.cloudflare.com`, `*.geetest.com`, `*.yidun.com`, `*.shumei.com`, `turing.captcha.*`) whose container has a real bounding box while the main document sees nothing inside. Handle: click by coordinate with `chrome_computer`, verify by widget state, retry with `double_click` (see above). Never try to compute a slider offset from the picture — the widget's own JS validates the trajectory.
+
+**2. Silent environment check** — no visible widget, but the request carries a token the page generated, or the page redirects you away. Detect: inspect what the page computes rather than guessing. Look for a hidden field, a request header, or a global.
+
+```sh
+aieasybrowser --session task eval 'return {webdriver: navigator.webdriver, ua: navigator.userAgent.slice(0,60), langs: navigator.languages.join(","), dpr: devicePixelRatio, tz: Intl.DateTimeFormat().resolvedOptions().timeZone}'
+```
+
+If `navigator.webdriver` is `true`, something in the launch path added automation flags — that is the first thing to fix, and it is not fixable from page JavaScript. Do not patch `navigator` properties to "pass" the check: real detection reads native function `toString()` and the property-descriptor chain, so a patched getter is a stronger signal than the value it returns.
+
+**3. Algorithmic signature** — the site signs every request with JS that runs on their page (`bx-ua`, `h5st`, `X-Bogus`, `_signature`, similar). Detect: the request fails with a signature/auth error while the page itself loads fine. Handle: call the site's own function instead of reimplementing it — the page already has a working implementation loaded.
+
+```sh
+aieasybrowser --session task eval 'const names = ["__sign", "_sign", "sign", "_signature", "byted_acrawler"]; const hits = names.filter((n) => typeof globalThis[n] === "function"); return {hits, sample: hits.length ? String(globalThis[hits[0]]).slice(0, 120) : null}'
+```
+
+Then call it with the real payload and read the result. Reimplementing the algorithm outside the page is the fallback of last resort: it breaks on every rotation and you cannot replay it if the site also checks environment.
+
+For a VM-obfuscated script that regenerates itself per request (Ruishu-style), neither reimplementation nor a captured token survives. The workable path is to keep the page alive in the user's Chrome and call into it — which is exactly what `eval` does — rather than extracting the algorithm.
+
+Rules that hold across all three:
+
+- Read the failure, do not guess. A `403` with a challenge body, a 200 HTML shell with no data, and a JSON error are three different problems.
+- Prefer the site's own code over a reimplementation; prefer the user's real session over a fresh one.
+- Never claim a check is passed because the click returned success. Verify from page state or a follow-up request.
+- Do not disable or patch platform security APIs to make a check disappear. Stop and report when the only remaining option is defeating a protection rather than completing a legitimate flow.
+
 ## Advanced operations
 
 Load only the capability needed:
