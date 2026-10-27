@@ -100,7 +100,7 @@ Rules that hold across all three:
 - Read the failure, do not guess. A `403` with a challenge body, a 200 HTML shell with no data, and a JSON error are three different problems.
 - Prefer the site's own code over a reimplementation; prefer the user's real session over a fresh one.
 - Never claim a check is passed because the click returned success. Verify from page state or a follow-up request.
-- Do not disable or patch platform security APIs to make a check disappear. Stop and report when the only remaining option is defeating a protection rather than completing a legitimate flow.
+- Patching `navigator`, `canvas`, or `toString` to change what a check sees usually makes detection easier, not harder: the check compares the descriptor chain and the native function body, so a replaced getter is more distinctive than the value behind it. Fix the actual cause (launch flags, missing focus, wrong timezone) instead of faking the surface.
 
 ## Advanced operations
 
