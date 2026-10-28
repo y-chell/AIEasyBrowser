@@ -177,6 +177,55 @@ describe('log failure handling', () => {
     expect(fs.statSync(target).size).toBeLessThan(1024);
   });
 
+  test('preserves all archives when a later rotation move fails', () => {
+    const target = path.join(fixtureDir, LOG_FILE_NAME);
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(target, 'x'.repeat(MAX_LOG_BYTES - 1), 'utf8');
+    fs.writeFileSync(target + '.3', 'OLD3', 'utf8');
+    fs.writeFileSync(target + '.4', 'OLD4', 'utf8');
+    fs.writeFileSync(target + '.5', 'OLD5', 'utf8');
+    const originalRename = fs.renameSync.bind(fs);
+    let failMove = true;
+    jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (failMove && String(from).includes('.rotate-') && String(to).endsWith('.4')) {
+        failMove = false;
+        const error = new Error('EACCES: permission denied, rename');
+        (error as NodeJS.ErrnoException).code = 'EACCES';
+        throw error;
+      }
+      return originalRename(from, to);
+    });
+
+    const failure = logger.info({ event: 'command.start', tool: 'health' });
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(fs.readFileSync(target + '.3', 'utf8')).toBe('OLD3');
+    expect(fs.readFileSync(target + '.4', 'utf8')).toBe('OLD4');
+    expect(fs.readFileSync(target + '.5', 'utf8')).toBe('OLD5');
+    expect(fs.statSync(target).size).toBe(MAX_LOG_BYTES - 1);
+  });
+
+  test('restores the live path when the rename probe cannot rename back', () => {
+    const target = path.join(fixtureDir, LOG_FILE_NAME);
+    const originalContent = 'existing log evidence\n';
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(target, originalContent, 'utf8');
+    const originalRename = fs.renameSync.bind(fs);
+    jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(from).includes('.rename-probe-') && String(to) === target) {
+        const error = new Error('EACCES: permission denied, rename back');
+        (error as NodeJS.ErrnoException).code = 'EACCES';
+        throw error;
+      }
+      return originalRename(from, to);
+    });
+
+    const probe = probeLogWritable();
+
+    expect(probe.ok).toBe(false);
+    expect(fs.readFileSync(target, 'utf8')).toBe(originalContent);
+  });
+
   test('probeLogWritable fails when a real archive cannot be renamed', () => {
     const target = path.join(fixtureDir, LOG_FILE_NAME);
     fs.mkdirSync(fixtureDir, { recursive: true });
@@ -206,7 +255,7 @@ describe('log failure handling', () => {
     fs.writeFileSync(`${target}.5`, 'OLD5', 'utf8');
     const originalRename = fs.renameSync.bind(fs);
     jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      if (String(from).endsWith('.4') && String(to).endsWith('.5')) {
+      if (String(from).includes('.rotate-') && String(to).endsWith('.5')) {
         const error = new Error('EACCES: permission denied, rename');
         (error as NodeJS.ErrnoException).code = 'EACCES';
         throw error;
@@ -234,6 +283,25 @@ describe('log failure handling', () => {
 
     expect(probe.ok).toBe(false);
     expect(String(probe.error)).toContain('probe cleanup failed');
+  });
+
+  test('does not overwrite or delete a colliding write-probe path', () => {
+    const originalOpen = fs.openSync.bind(fs);
+    const originalWrite = fs.writeFileSync.bind(fs);
+    let collisionPath: string | undefined;
+    jest.spyOn(fs, 'openSync').mockImplementation((target, flags, mode) => {
+      if (!collisionPath && String(target).includes('.write-probe-') && flags === 'wx') {
+        collisionPath = String(target);
+        originalWrite(collisionPath, 'KEEP', 'utf8');
+      }
+      return originalOpen(target, flags, mode);
+    });
+
+    const probe = probeLogWritable();
+
+    expect(probe.ok).toBe(false);
+    expect(collisionPath).toBeDefined();
+    expect(fs.readFileSync(collisionPath!, 'utf8')).toBe('KEEP');
   });
 
   test('never exceeds the size limit when rotation is blocked', () => {

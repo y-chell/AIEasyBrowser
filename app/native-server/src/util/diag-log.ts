@@ -12,6 +12,7 @@
  */
 
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { getLogDir } from '../scripts/utils';
 
@@ -91,6 +92,23 @@ function rotationSlot(filePath: string, index: number): string {
 
 let renameProbeCounter = 0;
 
+function uniqueSiblingPath(filePath: string, purpose: string): string {
+  let candidate: string;
+  do {
+    candidate =
+      filePath +
+      '.' +
+      purpose +
+      '-' +
+      process.pid +
+      '-' +
+      renameProbeCounter++ +
+      '-' +
+      randomUUID();
+  } while (fs.existsSync(candidate));
+  return candidate;
+}
+
 /**
  * Move `from` onto `to` without destroying an existing destination when the move
  * fails. The destination is parked under a backup name first and restored on error,
@@ -162,14 +180,92 @@ function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error
     }
   }
 
-  for (let index = MAX_LOG_FILES - 1; index >= 1; index -= 1) {
-    const from = rotationSlot(filePath, index);
-    const to = rotationSlot(filePath, index + 1);
-    if (!fs.existsSync(from)) continue;
-    const error = moveWithBackup(from, to);
-    if (error) return error;
+  const lastSlot = rotationSlot(filePath, MAX_LOG_FILES);
+  const lastBackup = fs.existsSync(lastSlot) ? uniqueSiblingPath(lastSlot, 'bak') : undefined;
+  if (lastBackup) {
+    const backupError = moveWithBackup(lastSlot, lastBackup);
+    if (backupError) return backupError;
   }
-  return moveWithBackup(filePath, rotationSlot(filePath, 1));
+
+  const moves = [
+    { from: filePath, to: rotationSlot(filePath, 1) },
+    ...Array.from({ length: MAX_LOG_FILES - 1 }, (_, index) => ({
+      from: rotationSlot(filePath, index + 1),
+      to: rotationSlot(filePath, index + 2),
+    })),
+  ].filter(({ from }) => fs.existsSync(from));
+  const staged = moves.map((move) => ({
+    ...move,
+    temp: uniqueSiblingPath(move.from, 'rotate'),
+    staged: false,
+    committed: false,
+  }));
+  let failure: unknown;
+
+  try {
+    for (const move of staged) {
+      fs.renameSync(move.from, move.temp);
+      move.staged = true;
+    }
+    for (const move of staged) {
+      fs.renameSync(move.temp, move.to);
+      move.committed = true;
+    }
+  } catch (error) {
+    failure = error;
+  }
+
+  if (failure) {
+    const rollbackErrors: string[] = [];
+    // First get committed destinations out of the way, then restore original slots.
+    for (const move of [...staged].reverse()) {
+      if (!move.committed) continue;
+      try {
+        fs.renameSync(move.to, move.temp);
+        move.committed = false;
+      } catch (error) {
+        rollbackErrors.push(
+          move.to + ': ' + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+    if (rollbackErrors.length === 0) {
+      for (const move of [...staged].reverse()) {
+        if (!move.staged) continue;
+        try {
+          fs.renameSync(move.temp, move.from);
+          move.staged = false;
+        } catch (error) {
+          rollbackErrors.push(
+            move.from + ': ' + (error instanceof Error ? error.message : String(error)),
+          );
+        }
+      }
+    }
+    if (lastBackup && !fs.existsSync(lastSlot)) {
+      try {
+        fs.renameSync(lastBackup, lastSlot);
+      } catch (error) {
+        rollbackErrors.push(
+          lastSlot + ': ' + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+    const detail = failure instanceof Error ? failure.message : String(failure);
+    const rollbackDetail = rollbackErrors.length
+      ? '; rollback incomplete: ' + rollbackErrors.join('; ')
+      : '';
+    return new Error('log rotation failed: ' + detail + rollbackDetail);
+  }
+
+  if (lastBackup) {
+    try {
+      fs.rmSync(lastBackup, { force: true });
+    } catch {
+      // A leftover backup still preserves the previous oldest archive.
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -180,7 +276,7 @@ function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error
  */
 function verifyPathRenameable(filePath: string): Error | undefined {
   if (!fs.existsSync(filePath)) return undefined;
-  const probe = `${filePath}.rename-probe-${process.pid}-${renameProbeCounter++}`;
+  const probe = uniqueSiblingPath(filePath, 'rename-probe');
   try {
     fs.renameSync(filePath, probe);
   } catch (error) {
@@ -191,6 +287,12 @@ function verifyPathRenameable(filePath: string): Error | undefined {
   try {
     fs.renameSync(probe, filePath);
   } catch (error) {
+    try {
+      fs.copyFileSync(probe, filePath, fs.constants.COPYFILE_EXCL);
+      fs.rmSync(probe);
+    } catch {
+      // Keep the probe file if restoring the original path is also denied.
+    }
     return new Error(
       `cannot restore ${filePath} after rename probe: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -281,7 +383,8 @@ export const logger = {
 export function probeLogWritable(): { ok: boolean; path: string; error?: string } {
   const target = getLogFilePath();
   const dir = path.dirname(target);
-  const writeProbe = path.join(dir, `.write-probe-${process.pid}-${renameProbeCounter++}`);
+  const writeProbe = path.join(dir, '.write-probe-' + process.pid + '-' + randomUUID());
+  let writeProbeCreated = false;
   let cleanupError: Error | undefined;
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -297,7 +400,13 @@ export function probeLogWritable(): { ok: boolean; path: string; error?: string 
 
     // The write probe checks the directory accepts new files and that a failure to
     // clean it up is reported rather than thrown at the caller.
-    fs.writeFileSync(writeProbe, 'probe\n', 'utf8');
+    const descriptor = fs.openSync(writeProbe, 'wx');
+    writeProbeCreated = true;
+    try {
+      fs.writeFileSync(descriptor, 'probe\n', 'utf8');
+    } finally {
+      fs.closeSync(descriptor);
+    }
 
     // Rotation renames the live file and every existing archive; verify each real
     // path can be renamed, not just a throwaway file in the same directory.
@@ -320,12 +429,14 @@ export function probeLogWritable(): { ok: boolean; path: string; error?: string 
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    try {
-      fs.rmSync(writeProbe, { force: true });
-    } catch (error) {
-      cleanupError = new Error(
-        `probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    if (writeProbeCreated) {
+      try {
+        fs.rmSync(writeProbe, { force: true });
+      } catch (error) {
+        cleanupError = new Error(
+          `probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
   if (cleanupError) {
