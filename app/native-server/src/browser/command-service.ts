@@ -136,13 +136,11 @@ export class BrowserCommandService {
       const message = parsed.error.issues
         .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
         .join('; ');
-      const sessionName =
-        isRecord(raw) && typeof raw.session === 'string' ? raw.session : 'default';
+      // The request was rejected before validation, so its session and command
+      // strings are untrusted. Log only the outcome, never those raw values.
       logger.warn({
         event: 'command.rejected',
         requestId: this.currentCommandId(),
-        session: sessionName,
-        tool: isRecord(raw) && typeof raw.command === 'string' ? raw.command : 'unknown',
         code: 'INVALID_ARGUMENT',
       });
       return browserFailure('INVALID_ARGUMENT', message);

@@ -90,17 +90,19 @@ function rotationSlot(filePath: string, index: number): string {
 }
 
 /**
- * Rotate before the next append. Returns an error instead of proceeding when a
- * rotation slot cannot be replaced, so the caller never writes past MAX_LOG_BYTES.
+ * Rotate before the next append. `thresholdBytes` is the size at which rotation is
+ * required; the writer passes the remaining space so a record that would cross the
+ * cap triggers rotation first. Returns an error instead of proceeding when rotation
+ * cannot be performed, so the caller never writes past MAX_LOG_BYTES.
  */
-function rotateIfNeeded(filePath: string): Error | undefined {
+function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error | undefined {
   let size: number;
   try {
     size = fs.statSync(filePath).size;
   } catch {
     return undefined;
   }
-  if (size < MAX_LOG_BYTES) return undefined;
+  if (size < thresholdBytes) return undefined;
 
   // Refuse to rotate when an archive slot is occupied by a non-regular file.
   for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
@@ -179,9 +181,16 @@ export function log(level: LogLevel, fields: LogFields): Error | undefined {
   const target = getLogFilePath();
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    const rotationError = rotateIfNeeded(target);
+    const line = `${JSON.stringify(record)}\n`;
+    const lineBytes = Buffer.byteLength(line, 'utf8');
+    if (lineBytes > MAX_LOG_BYTES) {
+      throw new Error('single log record exceeds the log size limit');
+    }
+    // Rotate when this record would not fit in the remaining space, not only when
+    // the file is already at the cap.
+    const rotationError = rotateIfNeeded(target, MAX_LOG_BYTES - lineBytes);
     if (rotationError) throw rotationError;
-    fs.appendFileSync(target, `${JSON.stringify(record)}\n`, 'utf8');
+    fs.appendFileSync(target, line, 'utf8');
     return undefined;
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -201,11 +210,14 @@ export const logger = {
 };
 
 /**
- * Verify the log location can accept a record, including that rotation will not be
- * blocked by a directory squatting on an archive slot. Used by startup and doctor.
+ * Verify the log location can accept a record: writable target, sane archive slots,
+ * and a rotation that can actually run. The rotation check runs the real rotate code
+ * against a throwaway copy in the same directory, so a rename denied by ACLs or a
+ * read-only directory fails the probe instead of surfacing on the first write.
  */
 export function probeLogWritable(): { ok: boolean; path: string; error?: string } {
   const target = getLogFilePath();
+  let probeDir: string | undefined;
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(target) && !fs.statSync(target).isFile()) {
@@ -219,6 +231,13 @@ export function probeLogWritable(): { ok: boolean; path: string; error?: string 
     }
     fs.appendFileSync(target, '', 'utf8');
     fs.accessSync(target, fs.constants.W_OK);
+
+    probeDir = fs.mkdtempSync(path.join(path.dirname(target), '.rotation-probe-'));
+    const probeLog = path.join(probeDir, LOG_FILE_NAME);
+    fs.writeFileSync(probeLog, 'probe\n', 'utf8');
+    const rotationError = rotateIfNeeded(probeLog, 1);
+    if (rotationError) throw rotationError;
+
     return { ok: true, path: target };
   } catch (error) {
     return {
@@ -226,6 +245,8 @@ export function probeLogWritable(): { ok: boolean; path: string; error?: string 
       path: target,
       error: error instanceof Error ? error.message : String(error),
     };
+  } finally {
+    if (probeDir) fs.rmSync(probeDir, { recursive: true, force: true });
   }
 }
 

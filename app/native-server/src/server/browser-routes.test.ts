@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import fs from 'node:fs';
+import path from 'node:path';
 import { BRIDGE_ENV } from '../constant';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { Server } from './index';
@@ -139,6 +141,19 @@ describe('direct browser HTTP route', () => {
       error: { code: 'INVALID_ARGUMENT' },
     });
     expect(send.mock.calls.length).toBe(callsBefore);
+  });
+
+  test('never writes raw session or command values into the diagnostic log', async () => {
+    await post({ command: 'health', session: 'FORM_VALUE_FIXTURE' });
+    await post({ command: 'CLIPBOARD_VALUE_FIXTURE', session: 'TOKEN_FIXTURE' });
+
+    const logDir = process.env.AIEASYBROWSER_LOG_DIR;
+    expect(logDir).toBeTruthy();
+    const logFile = path.join(String(logDir), 'native-server.log');
+    const raw = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+    expect(raw).not.toContain('FORM_VALUE_FIXTURE');
+    expect(raw).not.toContain('CLIPBOARD_VALUE_FIXTURE');
+    expect(raw).not.toContain('TOKEN_FIXTURE');
   });
   test('times out after an action completed, cancels the extension wait and releases the workflow', async () => {
     await post({ command: 'use', tabId: 7, session: 'task' });

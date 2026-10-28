@@ -112,9 +112,6 @@ export class Server {
           ? rawTimeout
           : 60_000;
       const elapsed = startTimer();
-      const body = request.body as Record<string, unknown> | undefined;
-      const session = typeof body?.session === 'string' ? body.session : 'default';
-      const command = typeof body?.command === 'string' ? body.command : 'unknown';
       // Server-generated only. Client-supplied correlation ids would need a schema
       // field and would weaken strict request validation, so none is accepted.
       const requestId = randomUUID();
@@ -135,8 +132,6 @@ export class Server {
       logger.info({
         event: 'command.start',
         requestId,
-        session,
-        tool: command,
         timeoutMs,
       });
       try {
@@ -159,8 +154,6 @@ export class Server {
         logger[response.ok ? 'info' : 'warn']({
           event: response.ok ? 'command.ok' : 'command.failed',
           requestId,
-          session,
-          tool: command,
           durationMs: elapsed(),
           phase: response.phase,
           actionStatus: response.actionStatus,
@@ -173,8 +166,6 @@ export class Server {
         logger.error({
           event: 'command.error',
           requestId,
-          session,
-          tool: command,
           durationMs: elapsed(),
           errorName: error instanceof Error ? error.name : undefined,
         });

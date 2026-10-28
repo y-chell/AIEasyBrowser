@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -162,6 +162,31 @@ describe('log failure handling', () => {
     const live = readRecords();
     expect(live).toHaveLength(1);
     expect(live[0].event).toBe('command.start');
+  });
+
+  test('rotates when the next record would cross the limit', () => {
+    const target = path.join(fixtureDir, LOG_FILE_NAME);
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    // One byte of headroom is not enough for a full record.
+    fs.writeFileSync(target, 'x'.repeat(MAX_LOG_BYTES - 1), 'utf8');
+
+    logger.info({ event: 'command.start', tool: 'health' });
+
+    expect(fs.existsSync(`${target}.1`)).toBe(true);
+    expect(fs.statSync(target).size).toBeLessThan(1024);
+  });
+
+  test('probeLogWritable fails when rotation rename is denied', () => {
+    jest.spyOn(fs, 'renameSync').mockImplementation(() => {
+      const error = new Error('EACCES: permission denied, rename');
+      (error as NodeJS.ErrnoException).code = 'EACCES';
+      throw error;
+    });
+
+    const probe = probeLogWritable();
+
+    expect(probe.ok).toBe(false);
+    expect(String(probe.error)).toContain('rotation failed');
   });
 
   test('never exceeds the size limit when rotation is blocked', () => {

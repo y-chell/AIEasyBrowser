@@ -542,8 +542,10 @@ describe('named CLI browser workflows', () => {
     expect(send).not.toHaveBeenCalled();
 
     const rejected = readLogRecords().find((record) => record.event === 'command.rejected');
-    expect(rejected).toMatchObject({ code: 'INVALID_ARGUMENT', tool: 'scan' });
+    expect(rejected).toMatchObject({ code: 'INVALID_ARGUMENT' });
     expect(rejected).not.toHaveProperty('error');
+    expect(rejected).not.toHaveProperty('session');
+    expect(rejected).not.toHaveProperty('tool');
   });
 
   test('records a failing phase without logging page content', async () => {
