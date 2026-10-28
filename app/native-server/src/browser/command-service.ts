@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { TOOL_SCHEMAS, type BrowserToolResult } from 'aieasybrowser-shared';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { BRIDGE_VERSION } from '../constant';
@@ -107,19 +108,29 @@ async function withSignal<T>(pending: Promise<T>, signal: AbortSignal): Promise<
 export class BrowserCommandService {
   private readonly sessions = new Map<string, BrowserSession>();
   /**
-   * Correlation id of the command currently executing, so every tool call it fans
-   * out to can be grouped under one CLI request without threading a parameter
-   * through every helper.
+   * Correlation id per in-flight command. AsyncLocalStorage keeps it bound to the
+   * async call chain, so concurrent commands (including one rejected with
+   * SESSION_BUSY) can never overwrite each other's identifier.
    */
-  private activeCommandId = '';
+  private readonly commandContext = new AsyncLocalStorage<{ id: string }>();
 
   constructor(private readonly getHost: () => NativeMessagingHost | null) {}
+
+  private currentCommandId(): string {
+    return this.commandContext.getStore()?.id ?? 'unknown';
+  }
 
   async execute(
     raw: unknown,
     signal: AbortSignal,
     correlationId?: string,
   ): Promise<BrowserCommandResponse> {
+    return this.commandContext.run({ id: correlationId ?? randomUUID() }, () =>
+      this.executeInner(raw, signal),
+    );
+  }
+
+  private async executeInner(raw: unknown, signal: AbortSignal): Promise<BrowserCommandResponse> {
     const parsed = browserCommandSchema.safeParse(raw);
     if (!parsed.success) {
       const message = parsed.error.issues
@@ -129,16 +140,15 @@ export class BrowserCommandService {
         isRecord(raw) && typeof raw.session === 'string' ? raw.session : 'default';
       logger.warn({
         event: 'command.rejected',
+        requestId: this.currentCommandId(),
         session: sessionName,
         tool: isRecord(raw) && typeof raw.command === 'string' ? raw.command : 'unknown',
         code: 'INVALID_ARGUMENT',
-        error: message,
       });
       return browserFailure('INVALID_ARGUMENT', message);
     }
     const command = parsed.data;
     const elapsed = startTimer();
-    this.activeCommandId = correlationId ?? randomUUID();
     if (signal.aborted) {
       return {
         ...browserFailure(
@@ -199,7 +209,7 @@ export class BrowserCommandService {
       signal.throwIfAborted();
       logger.info({
         event: 'command.done',
-        requestId: this.activeCommandId,
+        requestId: this.currentCommandId(),
         session: session.id,
         tool: command.command,
         durationMs: elapsed(),
@@ -237,7 +247,7 @@ export class BrowserCommandService {
       }
       logger.warn({
         event: 'command.failed',
-        requestId: this.activeCommandId,
+        requestId: this.currentCommandId(),
         session: session.id,
         tool: command.command,
         durationMs: elapsed(),
@@ -245,7 +255,6 @@ export class BrowserCommandService {
         actionStatus: state.actionStatus,
         completed: state.completed,
         code,
-        error: message,
       });
       return {
         ok: false,
@@ -286,13 +295,13 @@ export class BrowserCommandService {
     const frameId = typeof args.frameId === 'number' ? args.frameId : undefined;
     logger.info({
       event: 'tool.start',
-      requestId: this.activeCommandId,
+      requestId: this.currentCommandId(),
       session: session.id,
       tool: name,
       nativeRequestId,
       tabId,
       frameId,
-      extra: { documentId: documentId ? 'yes' : 'no' },
+      hasDocumentId: Boolean(documentId),
     });
     try {
       const result = await withSignal(
@@ -311,24 +320,27 @@ export class BrowserCommandService {
         signal,
       );
       signal.throwIfAborted();
+      // Decode first: a transport-level success that fails to decode is a tool
+      // failure, and must not be logged as tool.ok.
+      const decoded = decodeToolResult(result);
+      signal.throwIfAborted();
       logger.info({
         event: 'tool.ok',
-        requestId: this.activeCommandId,
+        requestId: this.currentCommandId(),
         session: session.id,
         tool: name,
         nativeRequestId,
         tabId,
         durationMs: elapsed(),
       });
-      return decodeToolResult(result);
+      return decoded;
     } catch (error) {
       const cause = signal.aborted ? signal.reason : error;
-      const message = errorMessage(cause);
       logger[
         cause instanceof BrowserCommandError && cause.code === 'STALE_DOCUMENT' ? 'warn' : 'error'
       ]({
         event: 'tool.failed',
-        requestId: this.activeCommandId,
+        requestId: this.currentCommandId(),
         session: session.id,
         tool: name,
         nativeRequestId,
@@ -341,7 +353,7 @@ export class BrowserCommandService {
             : cause instanceof Error && cause.name === 'AbortError'
               ? 'CANCELLED'
               : 'BROWSER_ERROR',
-        error: message,
+        errorName: cause instanceof Error ? cause.name : undefined,
       });
       throw cause instanceof Error || signal.aborted ? cause : error;
     }

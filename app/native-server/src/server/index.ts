@@ -115,11 +115,9 @@ export class Server {
       const body = request.body as Record<string, unknown> | undefined;
       const session = typeof body?.session === 'string' ? body.session : 'default';
       const command = typeof body?.command === 'string' ? body.command : 'unknown';
-      // One id spans the HTTP request, the command, and every tool call it dispatches.
-      const requestId = typeof body?.requestId === 'string' ? body.requestId : randomUUID();
-      // The command schema is strict, so the correlation id travels beside the payload.
-      const commandInput = body && typeof body === 'object' ? { ...body } : body;
-      if (commandInput && typeof commandInput === 'object') delete commandInput.requestId;
+      // Server-generated only. Client-supplied correlation ids would need a schema
+      // field and would weaken strict request validation, so none is accepted.
+      const requestId = randomUUID();
       const timer = setTimeout(
         () =>
           controller.abort(
@@ -139,11 +137,11 @@ export class Server {
         requestId,
         session,
         tool: command,
-        extra: { timeoutMs },
+        timeoutMs,
       });
       try {
         const response = await this.browserCommands.execute(
-          commandInput,
+          request.body,
           controller.signal,
           requestId,
         );
@@ -168,8 +166,7 @@ export class Server {
           actionStatus: response.actionStatus,
           completed: response.completed,
           code: response.error?.code,
-          error: response.error?.message,
-          extra: { status },
+          status,
         });
         if (!reply.raw.destroyed) return reply.code(status).send(response);
       } catch (error) {
@@ -179,7 +176,7 @@ export class Server {
           session,
           tool: command,
           durationMs: elapsed(),
-          error: error instanceof Error ? error.message : String(error),
+          errorName: error instanceof Error ? error.name : undefined,
         });
         throw error;
       } finally {
@@ -200,14 +197,13 @@ export class Server {
       logger.info({
         event: 'bridge.started',
         port: Number(new URL(address).port),
-        extra: { host: this.securityConfig.listenHost },
       });
     } catch (error) {
       this.isRunning = false;
       logger.error({
         event: 'bridge.start_failed',
         port,
-        error: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : undefined,
       });
       throw error;
     }
@@ -223,7 +219,7 @@ export class Server {
       this.isRunning = false;
       logger.error({
         event: 'bridge.stop_failed',
-        error: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : undefined,
       });
       throw error;
     }
@@ -234,5 +230,16 @@ export class Server {
   }
 }
 
-const serverInstance = new Server();
-export default serverInstance;
+/**
+ * Construct lazily so a bad AIEASYBROWSER_HOST thrown by parseHttpSecurityConfig
+ * happens inside the entry point's guarded startup, after logging is available,
+ * instead of during module import.
+ */
+let serverInstance: Server | undefined;
+
+export function getServerInstance(): Server {
+  if (!serverInstance) serverInstance = new Server();
+  return serverInstance;
+}
+
+export default getServerInstance;

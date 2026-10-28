@@ -129,6 +129,17 @@ describe('direct browser HTTP route', () => {
       actionStatus: 'not_started',
     });
   });
+  test('does not accept an undeclared requestId field on an otherwise valid command', async () => {
+    expect((await post({ command: 'health' })).statusCode).toBe(200);
+    const callsBefore = send.mock.calls.length;
+    const rejected = await post({ command: 'health', requestId: 123 });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT' },
+    });
+    expect(send.mock.calls.length).toBe(callsBefore);
+  });
   test('times out after an action completed, cancels the extension wait and releases the workflow', async () => {
     await post({ command: 'use', tabId: 7, session: 'task' });
     const ref = (await post({ command: 'scan', session: 'task' })).json().result.elements[0].ref;

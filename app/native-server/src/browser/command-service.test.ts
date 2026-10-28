@@ -543,7 +543,7 @@ describe('named CLI browser workflows', () => {
 
     const rejected = readLogRecords().find((record) => record.event === 'command.rejected');
     expect(rejected).toMatchObject({ code: 'INVALID_ARGUMENT', tool: 'scan' });
-    expect(String(rejected?.error)).toContain('limit');
+    expect(rejected).not.toHaveProperty('error');
   });
 
   test('records a failing phase without logging page content', async () => {
@@ -558,9 +558,94 @@ describe('named CLI browser workflows', () => {
     );
     expect(failed).toBeDefined();
     expect(failed?.tool).toBe('chrome_click_element');
+    expect(failed).not.toHaveProperty('error');
     const commandFailed = records.filter((record) => record.event === 'command.failed').at(-1);
     expect(commandFailed).toMatchObject({ phase: 'action', actionStatus: 'not_started' });
+    expect(commandFailed).not.toHaveProperty('error');
     // Records carry identifiers and outcome only; the page text never enters the log.
     expect(JSON.stringify(records)).not.toContain('Fixture');
+  });
+
+  test('keeps correlation ids separate when two sessions run concurrently', async () => {
+    let releaseFirst!: () => void;
+    let markStarted!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    send.mockImplementationOnce(async () => {
+      markStarted();
+      await firstGate;
+      return success({
+        windows: [
+          {
+            windowId: 1,
+            tabs: [{ tabId: 7, title: 'A', url: 'https://a.test/', active: true }],
+          },
+        ],
+      });
+    });
+
+    const first = service.execute(
+      { session: 'A', command: 'tabs' },
+      new AbortController().signal,
+      'review-A',
+    );
+    await started;
+    const second = await service.execute(
+      { session: 'B', command: 'tools' },
+      new AbortController().signal,
+      'review-B',
+    );
+    expect(second.ok).toBe(true);
+    releaseFirst();
+    await first;
+
+    const records = readLogRecords();
+    const startsForA = records.filter(
+      (record) => record.event === 'tool.start' && record.requestId === 'review-A',
+    );
+    const donesForA = records.filter(
+      (record) => record.event === 'command.done' && record.requestId === 'review-A',
+    );
+    expect(startsForA.length).toBeGreaterThan(0);
+    expect(donesForA).toHaveLength(1);
+    expect(records.some((record) => record.requestId === 'review-B')).toBe(true);
+    const aToolIds = new Set(startsForA.map((record) => record.nativeRequestId));
+    for (const record of records) {
+      if (record.requestId === 'review-B' && aToolIds.has(record.nativeRequestId)) {
+        throw new Error(`correlation leak: ${JSON.stringify(record)}`);
+      }
+    }
+  });
+
+  test('does not log tool.ok when a successful transport result fails to decode', async () => {
+    const ref = await selectedScan();
+    send.mockImplementationOnce(async () => ({
+      status: 'success',
+      data: {
+        success: false,
+        engine: 'cdp',
+        error: { kind: 'runtime_error', message: 'FORM_VALUE_FIXTURE' },
+      },
+    }));
+    await run({ command: 'act', actions: [{ op: 'click', ref }], scan: false });
+
+    const records = readLogRecords();
+    const lastStart = records.filter((record) => record.event === 'tool.start').at(-1);
+    const nativeId = lastStart?.nativeRequestId;
+    expect(nativeId).toBeDefined();
+
+    const okForCall = records.some(
+      (record) => record.event === 'tool.ok' && record.nativeRequestId === nativeId,
+    );
+    const failedForCall = records.some(
+      (record) => record.event === 'tool.failed' && record.nativeRequestId === nativeId,
+    );
+    expect(okForCall).toBe(false);
+    expect(failedForCall).toBe(true);
+    expect(JSON.stringify(records)).not.toContain('FORM_VALUE_FIXTURE');
   });
 });

@@ -1,14 +1,14 @@
 /**
  * Diagnostic logging for the native server.
  *
- * Every record is written as one JSON line with a fixed field whitelist. Free-form
- * request or response bodies are never passed through: callers provide only the
- * fields listed in `LogFields`, and `sanitizeText` scrubs anything that looks like
- * a credential from the few string fields that echo external text (error messages).
+ * Security model: the log API has no free-text field. Callers can only submit the
+ * fields listed in `LogFields`, and every string is validated against a narrow token
+ * grammar before it is written. Error messages, page text, form values, clipboard
+ * contents and tool result payloads therefore have no path into the log at all —
+ * this does not rely on pattern-matching secrets out of arbitrary text.
  *
  * Writes are synchronous so a crash immediately after logging still leaves the
- * record on disk, and so exit handlers do not need to await anything. The cost is
- * one small append per event, which is negligible next to a browser round trip.
+ * record on disk, and so exit handlers do not need to await anything.
  */
 
 import fs from 'node:fs';
@@ -21,8 +21,13 @@ export const MAX_LOG_FILES = 5;
 
 export type LogLevel = 'info' | 'warn' | 'error';
 
+/**
+ * Every field is either an internal identifier, an enum, a number, or a boolean.
+ * There is deliberately no `error`/`message`/`extra` slot: external text cannot be
+ * logged even by accident.
+ */
 export interface LogFields {
-  /** Command name for CLI requests, or a subsystem label for lifecycle events. */
+  /** Internal event name such as `command.start`. */
   event: string;
   /** Correlation id shared by a CLI command and every tool call it fans out to. */
   requestId?: string;
@@ -36,12 +41,17 @@ export interface LogFields {
   actionStatus?: string;
   completed?: number;
   durationMs?: number;
+  /** Machine-readable outcome code such as TIMEOUT or TARGET_CLOSED. */
   code?: string;
-  error?: string;
+  /** Error constructor name only, never an error message. */
+  errorName?: string;
+  status?: number;
+  timeoutMs?: number;
   port?: number;
   count?: number;
-  /** Extra short scalars. Values must already be safe to log. */
-  extra?: Record<string, string | number | boolean>;
+  exitCode?: number;
+  hasDocumentId?: boolean;
+  signal?: string;
 }
 
 export interface LogRecord extends Record<string, unknown> {
@@ -50,23 +60,12 @@ export interface LogRecord extends Record<string, unknown> {
   pid: number;
 }
 
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]'],
-  // Quoted JSON keys: {"password":"value"} and {"authToken": "value"}
-  [
-    /(["']?(?:auth[_-]?token|access[_-]?token|api[_-]?key|authorization|cookie|password|secret|session[_-]?id)["']?\s*[:=]\s*)(["'][^"']*["']|[^\s,;}]+)/gi,
-    '$1[redacted]',
-  ],
-];
+/** Identifiers and enum values only: no whitespace, quotes, JSON, or page text. */
+const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
-/** Scrub credential-shaped substrings out of text that may echo external input. */
-export function sanitizeText(input: string, maxLength = 400): string {
-  let value = input;
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    value = value.replace(pattern, replacement);
-  }
-  value = value.replace(/\s+/g, ' ').trim();
-  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+function token(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return TOKEN_PATTERN.test(value) ? value : 'invalid';
 }
 
 let logDirOverride: string | undefined;
@@ -86,29 +85,53 @@ export function getLogFilePath(): string {
   return path.join(getActiveLogDir(), LOG_FILE_NAME);
 }
 
-function rotateIfNeeded(filePath: string): void {
+function rotationSlot(filePath: string, index: number): string {
+  return `${filePath}.${index}`;
+}
+
+/**
+ * Rotate before the next append. Returns an error instead of proceeding when a
+ * rotation slot cannot be replaced, so the caller never writes past MAX_LOG_BYTES.
+ */
+function rotateIfNeeded(filePath: string): Error | undefined {
   let size: number;
   try {
     size = fs.statSync(filePath).size;
   } catch {
-    return;
+    return undefined;
   }
-  if (size < MAX_LOG_BYTES) return;
+  if (size < MAX_LOG_BYTES) return undefined;
 
-  for (let index = MAX_LOG_FILES - 1; index >= 1; index -= 1) {
-    const from = `${filePath}.${index}`;
-    const to = `${filePath}.${index + 1}`;
+  // Refuse to rotate when an archive slot is occupied by a non-regular file.
+  for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
+    const slot = rotationSlot(filePath, index);
     try {
-      fs.renameSync(from, to);
-    } catch {
-      // A missing rotation slot is expected until that many rotations happened.
+      if (!fs.statSync(slot).isFile()) {
+        return new Error(`log rotation blocked: ${slot} is not a regular file`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return new Error(`log rotation blocked: cannot inspect ${slot}`);
+      }
     }
   }
+
   try {
-    fs.renameSync(filePath, `${filePath}.1`);
-  } catch {
-    // If rotation fails the append below still reports the real problem.
+    for (let index = MAX_LOG_FILES - 1; index >= 1; index -= 1) {
+      const from = rotationSlot(filePath, index);
+      const to = rotationSlot(filePath, index + 1);
+      if (!fs.existsSync(from)) continue;
+      fs.rmSync(to, { force: true });
+      fs.renameSync(from, to);
+    }
+    fs.rmSync(rotationSlot(filePath, 1), { force: true });
+    fs.renameSync(filePath, rotationSlot(filePath, 1));
+  } catch (error) {
+    return new Error(
+      `log rotation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  return undefined;
 }
 
 /**
@@ -120,34 +143,44 @@ export function log(level: LogLevel, fields: LogFields): Error | undefined {
     ts: new Date().toISOString(),
     level,
     pid: process.pid,
-    event: sanitizeText(fields.event, 120),
+    event: token(fields.event) ?? 'invalid',
   };
-  if (fields.requestId) record.requestId = sanitizeText(fields.requestId, 120);
-  if (fields.session) record.session = sanitizeText(fields.session, 80);
-  if (fields.tool) record.tool = sanitizeText(fields.tool, 120);
-  if (fields.nativeRequestId) record.nativeRequestId = sanitizeText(fields.nativeRequestId, 120);
-  if (typeof fields.tabId === 'number') record.tabId = fields.tabId;
-  if (typeof fields.frameId === 'number') record.frameId = fields.frameId;
-  if (fields.phase) record.phase = sanitizeText(fields.phase, 40);
-  if (fields.actionStatus) record.actionStatus = sanitizeText(fields.actionStatus, 40);
+  const requestId = token(fields.requestId);
+  if (requestId) record.requestId = requestId;
+  const session = token(fields.session);
+  if (session) record.session = session;
+  const tool = token(fields.tool);
+  if (tool) record.tool = tool;
+  const nativeRequestId = token(fields.nativeRequestId);
+  if (nativeRequestId) record.nativeRequestId = nativeRequestId;
+  const phase = token(fields.phase);
+  if (phase) record.phase = phase;
+  const actionStatus = token(fields.actionStatus);
+  if (actionStatus) record.actionStatus = actionStatus;
+  const code = token(fields.code);
+  if (code) record.code = code;
+  const errorName = token(fields.errorName);
+  if (errorName) record.errorName = errorName;
+  const signal = token(fields.signal);
+  if (signal) record.signal = signal;
+  if (typeof fields.tabId === 'number' && Number.isFinite(fields.tabId))
+    record.tabId = fields.tabId;
+  if (typeof fields.frameId === 'number' && Number.isFinite(fields.frameId))
+    record.frameId = fields.frameId;
   if (typeof fields.completed === 'number') record.completed = fields.completed;
   if (typeof fields.durationMs === 'number') record.durationMs = Math.round(fields.durationMs);
-  if (fields.code) record.code = sanitizeText(fields.code, 80);
-  if (fields.error) record.error = sanitizeText(fields.error);
+  if (typeof fields.status === 'number') record.status = fields.status;
+  if (typeof fields.timeoutMs === 'number') record.timeoutMs = fields.timeoutMs;
   if (typeof fields.port === 'number') record.port = fields.port;
   if (typeof fields.count === 'number') record.count = fields.count;
-  if (fields.extra) {
-    const extra: Record<string, string | number | boolean> = {};
-    for (const [key, value] of Object.entries(fields.extra)) {
-      extra[sanitizeText(key, 40)] = typeof value === 'string' ? sanitizeText(value, 160) : value;
-    }
-    record.extra = extra;
-  }
+  if (typeof fields.exitCode === 'number') record.exitCode = fields.exitCode;
+  if (typeof fields.hasDocumentId === 'boolean') record.hasDocumentId = fields.hasDocumentId;
 
   const target = getLogFilePath();
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    rotateIfNeeded(target);
+    const rotationError = rotateIfNeeded(target);
+    if (rotationError) throw rotationError;
     fs.appendFileSync(target, `${JSON.stringify(record)}\n`, 'utf8');
     return undefined;
   } catch (error) {
@@ -155,9 +188,7 @@ export function log(level: LogLevel, fields: LogFields): Error | undefined {
     // Report once per process to stderr; the native messaging protocol owns stdout.
     if (!failureReported) {
       failureReported = true;
-      process.stderr.write(
-        `[aieasybrowser] log write failed (${target}): ${sanitizeText(failure.message)}\n`,
-      );
+      process.stderr.write(`[aieasybrowser] log write failed (${target}): ${failure.message}\n`);
     }
     return failure;
   }
@@ -169,15 +200,22 @@ export const logger = {
   error: (fields: LogFields) => log('error', fields),
 };
 
-/** Verify the log location can accept a record; used by startup and doctor. */
+/**
+ * Verify the log location can accept a record, including that rotation will not be
+ * blocked by a directory squatting on an archive slot. Used by startup and doctor.
+ */
 export function probeLogWritable(): { ok: boolean; path: string; error?: string } {
   const target = getLogFilePath();
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    // A directory or other non-regular file at the log path would make every append
-    // fail silently later, so reject anything that is not appendable now.
     if (fs.existsSync(target) && !fs.statSync(target).isFile()) {
       throw new Error('log path exists but is not a regular file');
+    }
+    for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
+      const slot = rotationSlot(target, index);
+      if (fs.existsSync(slot) && !fs.statSync(slot).isFile()) {
+        throw new Error(`rotation slot is not a regular file: ${slot}`);
+      }
     }
     fs.appendFileSync(target, '', 'utf8');
     fs.accessSync(target, fs.constants.W_OK);

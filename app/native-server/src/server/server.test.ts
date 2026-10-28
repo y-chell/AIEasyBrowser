@@ -16,6 +16,18 @@ afterEach(async () => {
   jest.restoreAllMocks();
 });
 
+describe('lazy server construction', () => {
+  test('does not construct on module import, so a bad host is thrown inside guarded startup', () => {
+    process.env[BRIDGE_ENV.HOST] = 'non-loopback.invalid';
+    jest.isolateModules(() => {
+      // Importing must not throw: the entry point probes logging and installs
+      // handlers before it calls getServerInstance().
+      const module = require('./index') as typeof import('./index');
+      expect(() => module.getServerInstance()).toThrow('AIEASYBROWSER_HOST');
+    });
+  });
+});
+
 describe('local browser bridge server', () => {
   test('returns a local health response without a protocol handshake', async () => {
     const response = await server.getInstance().inject({ method: 'GET', url: '/ping' });

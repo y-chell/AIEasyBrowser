@@ -49,6 +49,10 @@ export class NativeMessagingHost {
     try {
       this.setupMessageHandling();
     } catch (error: any) {
+      logger.error({
+        event: 'native.start_failed',
+        errorName: error instanceof Error ? error.name : undefined,
+      });
       process.exit(1);
     }
   }
@@ -109,12 +113,17 @@ export class NativeMessagingHost {
     });
 
     stdin.on('end', () => {
-      this.cleanup();
+      this.handleDisconnect('STDIN_END');
     });
 
     stdin.on('error', () => {
-      this.cleanup();
+      this.handleDisconnect('STDIN_ERROR');
     });
+  }
+
+  private handleDisconnect(code: 'STDIN_END' | 'STDIN_ERROR'): void {
+    logger[code === 'STDIN_END' ? 'info' : 'warn']({ event: 'native.disconnected', code });
+    this.cleanup();
   }
 
   private async handleMessage(message: any): Promise<void> {
@@ -147,7 +156,6 @@ export class NativeMessagingHost {
             nativeRequestId: requestId,
             durationMs: pending.startedAt?.(),
             code: 'EXTENSION_ERROR',
-            error: String(message.error),
           });
           pending.reject(new Error(message.error));
         } else {
@@ -275,7 +283,7 @@ export class NativeMessagingHost {
           nativeRequestId: requestId,
           durationMs: elapsed(),
           code: 'TIMEOUT',
-          extra: { timeoutMs },
+          timeoutMs,
         });
         pending.reject(
           new Error(

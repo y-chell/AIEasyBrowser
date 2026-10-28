@@ -117,7 +117,7 @@ describe('NativeMessagingHost request lifecycle', () => {
       code: 'TIMEOUT',
     });
     expect(typeof timeout.durationMs).toBe('number');
-    expect(timeout.extra).toEqual({ timeoutMs: 50 });
+    expect(timeout.timeoutMs).toBe(50);
   });
 
   test('records a successful response with its duration', async () => {
@@ -200,5 +200,39 @@ describe('NativeMessagingHost request lifecycle', () => {
       payload: { requestId },
     });
     expect((host as any).pendingRequests.size).toBe(0);
+  });
+
+  test('records the reason when stdin disconnects', () => {
+    const { host } = createHost();
+    jest.spyOn(host as any, 'cleanup').mockImplementation(() => undefined);
+
+    (host as any).handleDisconnect('STDIN_END');
+
+    const records = fs
+      .readFileSync(path.join(logDir, 'native-server.log'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const disconnected = records.find((record) => record.event === 'native.disconnected');
+    expect(disconnected).toMatchObject({ code: 'STDIN_END', level: 'info' });
+  });
+
+  test('logs a startup failure before exiting', () => {
+    const { host } = createHost();
+    jest.spyOn(host as any, 'setupMessageHandling').mockImplementation(() => {
+      throw new Error('fixture startup failure');
+    });
+    const exit = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    host.start();
+
+    expect(exit).toHaveBeenCalledWith(1);
+    const records = fs
+      .readFileSync(path.join(logDir, 'native-server.log'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    expect(records.some((record) => record.event === 'native.start_failed')).toBe(true);
+    expect(JSON.stringify(records)).not.toContain('fixture startup failure');
   });
 });
