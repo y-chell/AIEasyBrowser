@@ -23,6 +23,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setLogDirForTests(undefined);
+  jest.restoreAllMocks();
   expect(path.dirname(path.resolve(fixtureDir))).toBe(path.resolve(os.tmpdir()));
   expect(path.basename(fixtureDir)).toMatch(/^aieasybrowser-log-/);
   fs.rmSync(fixtureDir, { recursive: true, force: true });
@@ -176,17 +177,63 @@ describe('log failure handling', () => {
     expect(fs.statSync(target).size).toBeLessThan(1024);
   });
 
-  test('probeLogWritable fails when rotation rename is denied', () => {
-    jest.spyOn(fs, 'renameSync').mockImplementation(() => {
-      const error = new Error('EACCES: permission denied, rename');
-      (error as NodeJS.ErrnoException).code = 'EACCES';
-      throw error;
+  test('probeLogWritable fails when a real archive cannot be renamed', () => {
+    const target = path.join(fixtureDir, LOG_FILE_NAME);
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(target, 'live\n', 'utf8');
+    fs.writeFileSync(`${target}.4`, 'archive four\n', 'utf8');
+    const originalRename = fs.renameSync.bind(fs);
+    jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(from).endsWith('.4')) {
+        const error = new Error('EACCES: permission denied, rename');
+        (error as NodeJS.ErrnoException).code = 'EACCES';
+        throw error;
+      }
+      return originalRename(from, to);
     });
 
     const probe = probeLogWritable();
 
     expect(probe.ok).toBe(false);
-    expect(String(probe.error)).toContain('rotation failed');
+    expect(String(probe.error)).toContain('cannot rename');
+  });
+
+  test('keeps existing archives when a rotation move fails', () => {
+    const target = path.join(fixtureDir, LOG_FILE_NAME);
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(target, 'x'.repeat(MAX_LOG_BYTES - 1), 'utf8');
+    fs.writeFileSync(`${target}.4`, 'OLD4', 'utf8');
+    fs.writeFileSync(`${target}.5`, 'OLD5', 'utf8');
+    const originalRename = fs.renameSync.bind(fs);
+    jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(from).endsWith('.4') && String(to).endsWith('.5')) {
+        const error = new Error('EACCES: permission denied, rename');
+        (error as NodeJS.ErrnoException).code = 'EACCES';
+        throw error;
+      }
+      return originalRename(from, to);
+    });
+
+    const failure = logger.info({ event: 'command.start', tool: 'health' });
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(fs.readFileSync(`${target}.4`, 'utf8')).toBe('OLD4');
+    expect(fs.readFileSync(`${target}.5`, 'utf8')).toBe('OLD5');
+  });
+
+  test('probeLogWritable returns an error instead of throwing when cleanup fails', () => {
+    const originalRm = fs.rmSync.bind(fs);
+    jest.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (String(target).includes('.write-probe-')) {
+        throw new Error('EBUSY: resource busy, unlink');
+      }
+      return originalRm(target, options);
+    });
+
+    const probe = probeLogWritable();
+
+    expect(probe.ok).toBe(false);
+    expect(String(probe.error)).toContain('probe cleanup failed');
   });
 
   test('never exceeds the size limit when rotation is blocked', () => {

@@ -89,6 +89,50 @@ function rotationSlot(filePath: string, index: number): string {
   return `${filePath}.${index}`;
 }
 
+let renameProbeCounter = 0;
+
+/**
+ * Move `from` onto `to` without destroying an existing destination when the move
+ * fails. The destination is parked under a backup name first and restored on error,
+ * so a rename denied halfway through rotation never deletes existing log evidence.
+ */
+function moveWithBackup(from: string, to: string): Error | undefined {
+  const backup = `${to}.bak-${process.pid}-${renameProbeCounter++}`;
+  let parkedDestination = false;
+  try {
+    if (fs.existsSync(to)) {
+      fs.renameSync(to, backup);
+      parkedDestination = true;
+    }
+  } catch (error) {
+    return new Error(
+      `log rotation failed: cannot park ${to}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  try {
+    fs.renameSync(from, to);
+  } catch (error) {
+    if (parkedDestination) {
+      try {
+        fs.renameSync(backup, to);
+      } catch {
+        // The old destination stays under its backup name rather than being lost.
+      }
+    }
+    return new Error(
+      `log rotation failed: cannot move ${from}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (parkedDestination) {
+    try {
+      fs.rmSync(backup, { force: true });
+    } catch {
+      // A leftover backup is harmless and still contains the previous archive.
+    }
+  }
+  return undefined;
+}
+
 /**
  * Rotate before the next append. `thresholdBytes` is the size at which rotation is
  * required; the writer passes the remaining space so a record that would cross the
@@ -118,19 +162,37 @@ function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error
     }
   }
 
+  for (let index = MAX_LOG_FILES - 1; index >= 1; index -= 1) {
+    const from = rotationSlot(filePath, index);
+    const to = rotationSlot(filePath, index + 1);
+    if (!fs.existsSync(from)) continue;
+    const error = moveWithBackup(from, to);
+    if (error) return error;
+  }
+  return moveWithBackup(filePath, rotationSlot(filePath, 1));
+}
+
+/**
+ * Verify that an existing file can actually be renamed, which rotation requires.
+ * Renames the real file to a sibling probe name and immediately restores it, so an
+ * ACL or attribute that blocks rotation on that specific archive is detected here
+ * rather than on the first write.
+ */
+function verifyPathRenameable(filePath: string): Error | undefined {
+  if (!fs.existsSync(filePath)) return undefined;
+  const probe = `${filePath}.rename-probe-${process.pid}-${renameProbeCounter++}`;
   try {
-    for (let index = MAX_LOG_FILES - 1; index >= 1; index -= 1) {
-      const from = rotationSlot(filePath, index);
-      const to = rotationSlot(filePath, index + 1);
-      if (!fs.existsSync(from)) continue;
-      fs.rmSync(to, { force: true });
-      fs.renameSync(from, to);
-    }
-    fs.rmSync(rotationSlot(filePath, 1), { force: true });
-    fs.renameSync(filePath, rotationSlot(filePath, 1));
+    fs.renameSync(filePath, probe);
   } catch (error) {
     return new Error(
-      `log rotation failed: ${error instanceof Error ? error.message : String(error)}`,
+      `cannot rename ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  try {
+    fs.renameSync(probe, filePath);
+  } catch (error) {
+    return new Error(
+      `cannot restore ${filePath} after rename probe: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   return undefined;
@@ -210,16 +272,19 @@ export const logger = {
 };
 
 /**
- * Verify the log location can accept a record: writable target, sane archive slots,
- * and a rotation that can actually run. The rotation check runs the real rotate code
- * against a throwaway copy in the same directory, so a rename denied by ACLs or a
- * read-only directory fails the probe instead of surfacing on the first write.
+ * Verify the log location can accept a record: the target is writable, archive slots
+ * are regular files, every existing file can actually be renamed (rotation needs it),
+ * and a temporary write can be created and cleaned up. Real files are renamed to a
+ * sibling probe name and immediately restored, so ACLs that differ per archive are
+ * caught here instead of during the first rotation.
  */
 export function probeLogWritable(): { ok: boolean; path: string; error?: string } {
   const target = getLogFilePath();
-  let probeDir: string | undefined;
+  const dir = path.dirname(target);
+  const writeProbe = path.join(dir, `.write-probe-${process.pid}-${renameProbeCounter++}`);
+  let cleanupError: Error | undefined;
   try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
     if (fs.existsSync(target) && !fs.statSync(target).isFile()) {
       throw new Error('log path exists but is not a regular file');
     }
@@ -229,16 +294,25 @@ export function probeLogWritable(): { ok: boolean; path: string; error?: string 
         throw new Error(`rotation slot is not a regular file: ${slot}`);
       }
     }
+
+    // The write probe checks the directory accepts new files and that a failure to
+    // clean it up is reported rather than thrown at the caller.
+    fs.writeFileSync(writeProbe, 'probe\n', 'utf8');
+
+    // Rotation renames the live file and every existing archive; verify each real
+    // path can be renamed, not just a throwaway file in the same directory.
+    const renameError =
+      verifyPathRenameable(target) ??
+      (() => {
+        for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
+          const error = verifyPathRenameable(rotationSlot(target, index));
+          if (error) return error;
+        }
+        return undefined;
+      })();
+    if (renameError) throw renameError;
     fs.appendFileSync(target, '', 'utf8');
     fs.accessSync(target, fs.constants.W_OK);
-
-    probeDir = fs.mkdtempSync(path.join(path.dirname(target), '.rotation-probe-'));
-    const probeLog = path.join(probeDir, LOG_FILE_NAME);
-    fs.writeFileSync(probeLog, 'probe\n', 'utf8');
-    const rotationError = rotateIfNeeded(probeLog, 1);
-    if (rotationError) throw rotationError;
-
-    return { ok: true, path: target };
   } catch (error) {
     return {
       ok: false,
@@ -246,8 +320,18 @@ export function probeLogWritable(): { ok: boolean; path: string; error?: string 
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    if (probeDir) fs.rmSync(probeDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(writeProbe, { force: true });
+    } catch (error) {
+      cleanupError = new Error(
+        `probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
+  if (cleanupError) {
+    return { ok: false, path: target, error: cleanupError.message };
+  }
+  return { ok: true, path: target };
 }
 
 /** Timestamped duration helper for command and tool timing. */
