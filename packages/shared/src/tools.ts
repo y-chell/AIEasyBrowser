@@ -1201,7 +1201,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           description: 'Timeout in milliseconds (default: 30000)',
         },
         formData: {
-          type: 'object',
+          type: ['object', 'array'],
           description:
             'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:.',
         },

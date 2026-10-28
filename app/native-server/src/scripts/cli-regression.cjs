@@ -25,7 +25,13 @@ function responseFromRun(run, label) {
     throw new Error(
       label +
         ' did not print one JSON response: ' +
-        (error instanceof Error ? error.message : String(error)),
+        (error instanceof Error ? error.message : String(error)) +
+        '; status=' +
+        run.status +
+        '; signal=' +
+        run.signal +
+        '; stderr=' +
+        String(run.stderr || ''),
     );
   }
 }
@@ -363,6 +369,53 @@ function readLogRecords(logPath) {
         .filter(Boolean)
         .map((line) => JSON.parse(line)),
     );
+}
+
+function testAdvancedInputContract(run, task, logPath) {
+  const snapshot = assertOk(run(task, ['session']), 'read contract-test task').result.snapshot;
+  const sessionId = snapshot.split('.')[0];
+  const starts = () =>
+    readLogRecords(logPath).filter(
+      (record) => record.event === 'tool.start' && record.session === sessionId,
+    );
+  const before = starts().map((record) => record.nativeRequestId);
+  const invalid = [
+    ['chrome_javascript', {}, 'args/code'],
+    ['chrome_switch_tab', { tabId: '7' }, 'args/tabId'],
+    ['chrome_screenshot', { savePng: 'false' }, 'args/savePng'],
+    ['chrome_clipboard', { action: 'delete' }, 'args/action'],
+    ['chrome_wait_for', { condition: { kind: 'text', extra: true } }, 'args/condition/extra'],
+    ['chrome_cdp_batch', { commands: [{}] }, 'args/commands/0/method'],
+    ['chrome_fill_or_select', { value: null }, 'args/value'],
+  ];
+  for (const [tool, args, pointer] of invalid) {
+    const rejected = run(task, ['call', tool, JSON.stringify(args)]);
+    const response = assertFailure(rejected, 'invalid advanced input for ' + tool);
+    assert.equal(rejected.status, 2);
+    assert.equal(response.error?.code, 'INVALID_ARGUMENT');
+    assert(response.error.message.includes(pointer), 'missing rejected argument path ' + pointer);
+    assert.equal(response.actionStatus, 'not_started');
+    assert.equal(response.completed, 0);
+  }
+  assert.deepEqual(
+    starts().map((record) => record.nativeRequestId),
+    before,
+    'invalid advanced input reached Native Messaging',
+  );
+  assertOk(run(task, ['describe', 'chrome_cdp_batch']), 'describe tool with required arguments');
+  const cdp = assertOk(
+    run(task, [
+      'call',
+      'chrome_cdp_command',
+      JSON.stringify({
+        method: 'Runtime.evaluate',
+        params: { expression: '({ fixture: "P3", values: [0, false] })', returnByValue: true },
+      }),
+    ]),
+    'valid free CDP params',
+  );
+  assert.deepEqual(cdp.result.result.result.value, { fixture: 'P3', values: [0, false] });
+  return { rejectedBeforeDispatch: invalid.length, freeCdpParams: true };
 }
 
 async function testLateExecution(start, run, taskA, taskB, fixture, logPath, mode) {
@@ -755,6 +808,7 @@ async function runRegression() {
       );
       assertFailure(invalidCondition, 'invalid JavaScript condition');
       assert.equal(invalidCondition.response.phase, 'wait');
+      const inputContract = testAdvancedInputContract(run, taskA, logs.details.path);
 
       assertOk(run(taskA, ['open', urls[0], '--current']), 'reload before timeout fixture');
       await testTimeoutContinuation(run, taskA);
@@ -770,7 +824,7 @@ async function runRegression() {
         await testLateExecution(start, run, taskA, taskB, fixture, logs.details.path, 'disconnect'),
       );
       const httpsCsp = await testHttpsCopy(run, httpsSession, runId, urls, tabIds);
-      return { runId, lateExecutions, httpsCsp };
+      return { runId, inputContract, lateExecutions, httpsCsp };
     },
     async () => {
       const pendingResults = await Promise.allSettled([...inFlight]);
@@ -817,5 +871,6 @@ module.exports = {
   runProcess,
   readLogRecords,
   testHttpsCopy,
+  testAdvancedInputContract,
   runWithCleanup,
 };

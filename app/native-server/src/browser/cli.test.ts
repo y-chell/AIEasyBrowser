@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import { Command } from 'commander';
 import { BRIDGE_ENV } from '../constant';
+import { BrowserCommandService } from './command-service';
+import type { NativeMessagingHost } from '../native-messaging-host';
 import {
   browserExitCode,
   getBrowserEndpoint,
@@ -40,6 +42,33 @@ async function parse(argv: string[]) {
 }
 
 describe('browser CLI grammar and HTTP transport', () => {
+  test('prints one JSON INVALID_ARGUMENT response and exits 2 for rejected advanced input', async () => {
+    const send = jest.fn<NativeMessagingHost['sendRequestToExtensionAndWait']>();
+    const service = new BrowserCommandService(
+      () => ({ sendRequestToExtensionAndWait: send }) as unknown as NativeMessagingHost,
+    );
+    fetchMock.mockImplementation(async (_url, options) => {
+      const response = await service.execute(
+        JSON.parse(options?.body as string),
+        new AbortController().signal,
+      );
+      return new Response(JSON.stringify(response), { status: response.ok ? 200 : 400 });
+    });
+    await parse(['call', 'chrome_cdp_batch', '{"commands":[{}]}']);
+    expect(stdout).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(stdout.mock.calls[0][0] as string)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'INVALID_ARGUMENT',
+        message: expect.stringContaining('args/commands/0/method'),
+      },
+      actionStatus: 'not_started',
+      completed: 0,
+    });
+    expect(process.exitCode).toBe(2);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   test.each([
     ['http://127.0.0.1:12307', 'http://127.0.0.1:12307/browser'],
     ['http://localhost:12307/browser', 'http://localhost:12307/browser'],

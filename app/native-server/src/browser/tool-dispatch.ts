@@ -1,4 +1,5 @@
 import { NativeMessageType, TOOL_SCHEMAS, type BrowserToolResult } from 'aieasybrowser-shared';
+import Ajv from 'ajv';
 import type { NativeMessagingHost, ExtensionRequestOptions } from '../native-messaging-host';
 import { getToolCallTimeoutMs } from './tool-timeouts';
 
@@ -11,20 +12,38 @@ export interface BrowserDispatchContext {
 
 export class ToolInputError extends Error {}
 
+const ajv = new Ajv({
+  strict: true,
+  allowUnionTypes: true,
+  ownProperties: true,
+  coerceTypes: false,
+  useDefaults: false,
+  removeAdditional: false,
+});
+
+// Compile trusted contracts once. Invalid/unsupported schemas fail at startup, not
+// by silently skipping a constraint while processing a browser command.
+const contracts = new Map(
+  TOOL_SCHEMAS.map((tool) => [tool.name, { tool, validate: ajv.compile(tool.inputSchema) }]),
+);
+
+export function getBrowserToolDefinition(name: string) {
+  const contract = contracts.get(name);
+  if (!contract) throw new ToolInputError(`Unknown browser tool: ${name}`);
+  return contract.tool;
+}
+
 export function validateBrowserToolArguments(name: string, args: unknown) {
-  const tool = TOOL_SCHEMAS.find((item) => item.name === name);
-  if (!tool) throw new ToolInputError(`Unknown browser tool: ${name}`);
-  if (!args || typeof args !== 'object' || Array.isArray(args)) {
-    throw new ToolInputError(`Arguments for ${name} must be an object`);
-  }
-  if (tool.inputSchema.additionalProperties === false) {
-    const properties = tool.inputSchema.properties ?? {};
-    const unexpected = Object.keys(args).filter(
-      (key) => !Object.prototype.hasOwnProperty.call(properties, key),
-    );
-    if (unexpected.length > 0) {
-      throw new ToolInputError(`Unknown parameter(s) for ${name}: ${unexpected.join(', ')}`);
+  const tool = getBrowserToolDefinition(name);
+  const validate = contracts.get(name)!.validate;
+  if (!validate(args)) {
+    const issue = validate.errors![0];
+    let pointer = issue.instancePath;
+    const property = issue.params.missingProperty ?? issue.params.additionalProperty;
+    if (typeof property === 'string') {
+      pointer += '/' + property.replace(/~/g, '~0').replace(/\//g, '~1');
     }
+    throw new ToolInputError(`Invalid arguments for ${name} at args${pointer}: ${issue.message}`);
   }
   return tool;
 }

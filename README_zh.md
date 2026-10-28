@@ -191,7 +191,11 @@ aieasybrowser session --list
 aieasybrowser --session github session --forget
 ```
 
-`call` 仅在 session 已选择目标、且工具接受 `tabId` 时补入该目标；没有已选目标时保留工具原来的默认规则，系统剪贴板读写等操作无需先选择标签。其他工具遵循自己的 URL/活动标签规则，例如抓包工具没有 `tabId`。不带 tab IDs 或 URL 的 `chrome_close_tabs` 必须有已选目标，只关闭该 session 的标签，不默认关闭用户当前活动页。高级调用继续拒绝未声明的顶层参数，但不是完整 JSON Schema 校验器。最多保留 64 个任务 session；`session --forget` 只清状态，不关闭标签。桥接器/扩展重启后状态不持久化，需重新选择真实标签并扫描，旧句柄不会自动恢复或重放。
+`call` 仅在 session 已选择目标、且工具接受 `tabId` 时补入该目标；没有已选目标时保留工具原来的默认规则，系统剪贴板读写等操作无需先选择标签。其他工具遵循自己的 URL/活动标签规则，例如抓包工具没有 `tabId`。不带 tab IDs 或 URL 的 `chrome_close_tabs` 必须有已选目标，只关闭该 session 的标签，不默认关闭用户当前活动页。最多保留 64 个任务 session；`session --forget` 只清状态，不关闭标签。桥接器/扩展重启后状态不持久化，需重新选择真实标签并扫描，旧句柄不会自动恢复或重放。
+
+高级 `call` 在浏览器 IO 前按 `describe` 返回的完整输入 schema 校验必填项、类型、枚举、嵌套对象及数组条目。非法参数返回 `INVALID_ARGUMENT`、退出码 `2`，错误中的 `args/commands/0/method` 等路径使用 JSON Pointer（属性名中的 `~` 和 `/` 分别写成 `~0`、`~1`）。此前能传到扩展的非法输入现在会提前拒绝，不使已有 ref 失效；通过校验并执行的 `call` 仍会使旧 ref 失效。
+
+校验不把字符串 `"false"` 改成布尔值、不删多余字段、不填默认值；headers 和 CDP params 等未声明固定字段的 map 保持开放；formData 保留现有对象与紧凑数组两种写法。schema 目前未声明数值范围、整数或数组长度约束，描述里的上限不是新增校验规则；工具原有运行时限制仍有效。`describe` 无需提供工具调用的必填参数。
 
 ## 本机连接配置
 

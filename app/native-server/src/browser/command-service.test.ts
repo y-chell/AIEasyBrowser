@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { BrowserCommandService } from './command-service';
 import { BrowserCommandError } from './protocol';
+import { TOOL_SCHEMAS } from 'aieasybrowser-shared';
 import { setLogDirForTests } from '../util/diag-log';
 
 let logDir: string;
@@ -122,6 +123,64 @@ async function selectedScan(session = 'task') {
 }
 
 describe('named CLI browser workflows', () => {
+  test.each(TOOL_SCHEMAS)('describes $name independently of required call input', async (tool) => {
+    expect(await run({ command: 'describe', tool: tool.name })).toMatchObject({
+      ok: true,
+      result: tool,
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['chrome_javascript', {}, 'args/code'],
+    ['chrome_switch_tab', { tabId: '7' }, 'args/tabId'],
+    ['chrome_screenshot', { savePng: 'false' }, 'args/savePng'],
+    ['chrome_clipboard', { action: 'delete' }, 'args/action'],
+    ['chrome_wait_for', { condition: { kind: 'text', extra: true } }, 'args/condition/extra'],
+    ['chrome_cdp_batch', { commands: [{}] }, 'args/commands/0/method'],
+    ['chrome_fill_or_select', { value: {} }, 'args/value'],
+    ['chrome_close_tabs', { extra: true }, 'args/extra'],
+  ])(
+    'rejects invalid call %s before target IO or ref invalidation',
+    async (tool, args, pointer) => {
+      expect(await run({ command: 'call', tool, args })).toMatchObject({
+        ok: false,
+        error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining(pointer as string) },
+        actionStatus: 'not_started',
+        completed: 0,
+      });
+      expect(send).not.toHaveBeenCalled();
+      const ref = await selectedScan();
+      send.mockClear();
+      expect(await run({ command: 'call', tool, args })).toMatchObject({
+        error: { code: 'INVALID_ARGUMENT' },
+      });
+      expect(send).not.toHaveBeenCalled();
+      expect((await run({ command: 'act', actions: [{ op: 'click', ref }], scan: false })).ok).toBe(
+        true,
+      );
+      expect(send.mock.calls[0][0].name).toBe('chrome_click_element');
+    },
+  );
+
+  test('validates after selected-tab binding while preserving explicit targets and open params', async () => {
+    expect(await run({ command: 'call', tool: 'chrome_switch_tab' })).toMatchObject({
+      error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining('args/tabId') },
+    });
+    expect(send).not.toHaveBeenCalled();
+    await run({ command: 'use', tabId: 7 });
+    send.mockClear();
+    expect((await run({ command: 'call', tool: 'chrome_switch_tab' })).ok).toBe(true);
+    expect(send.mock.calls[0][0].args).toEqual({ tabId: 7 });
+    const args = {
+      method: 'Runtime.evaluate',
+      tabId: 8,
+      params: { expression: '1', returnByValue: true, custom: { nested: [false, null] } },
+    };
+    expect((await run({ command: 'call', tool: 'chrome_cdp_command', args })).ok).toBe(true);
+    expect(send.mock.calls.at(-1)?.[0].args).toEqual(args);
+  });
+
   test('keeps the selected tab across commands without switching browser focus', async () => {
     await run({ command: 'use', tabId: 8 });
     const page = await run({ command: 'scan' });

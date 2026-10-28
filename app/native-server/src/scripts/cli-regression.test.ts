@@ -14,6 +14,11 @@ const regression = require('./cli-regression.cjs') as {
     waitForSignal: (name: string) => Promise<void>;
   }>;
   readLogRecords: (file: string) => Array<Record<string, unknown>>;
+  testAdvancedInputContract: (
+    run: (session: string, args: string[]) => any,
+    task: string,
+    logPath: string,
+  ) => unknown;
   testHttpsCopy: (
     run: (...args: any[]) => any,
     session: string,
@@ -21,7 +26,16 @@ const regression = require('./cli-regression.cjs') as {
     urls: string[],
     tabIds: number[],
   ) => Promise<unknown>;
-  parseCliRun: (run: { stdout: string; error?: Error }, label: string) => unknown;
+  parseCliRun: (
+    run: {
+      stdout: string;
+      error?: Error;
+      status?: number | null;
+      signal?: string | null;
+      stderr?: string;
+    },
+    label: string,
+  ) => unknown;
   runProcess: (
     executable: string,
     args: string[],
@@ -32,6 +46,68 @@ const regression = require('./cli-regression.cjs') as {
 };
 
 describe('CLI-only regression harness', () => {
+  test('requires invalid advanced calls to fail before dispatch, and checks free CDP params positively', () => {
+    const snapshot = 'task-id.1';
+    let leaked = false;
+    let wrongSuccess = false;
+    let records = '';
+    jest.spyOn(fs, 'existsSync').mockImplementation((file) => String(file) === 'fixture-log');
+    jest.spyOn(fs, 'readFileSync').mockImplementation(() => records);
+    const run = (_session: string, args: string[]) => {
+      if (args[0] === 'session') return { status: 0, response: { ok: true, result: { snapshot } } };
+      if (args[0] === 'describe') return { status: 0, response: { ok: true, result: {} } };
+      if (args[1] === 'chrome_cdp_command')
+        return {
+          status: 0,
+          response: {
+            ok: true,
+            result: { result: { result: { value: { fixture: 'P3', values: [0, false] } } } },
+          },
+        };
+      if (leaked)
+        records = JSON.stringify({
+          event: 'tool.start',
+          session: 'task-id',
+          nativeRequestId: 'leaked',
+        });
+      const pointers: Record<string, string> = {
+        chrome_javascript: 'args/code',
+        chrome_switch_tab: 'args/tabId',
+        chrome_screenshot: 'args/savePng',
+        chrome_clipboard: 'args/action',
+        chrome_wait_for: 'args/condition/extra',
+        chrome_cdp_batch: 'args/commands/0/method',
+        chrome_fill_or_select: 'args/value',
+      };
+      return {
+        status: wrongSuccess ? 0 : 2,
+        response: {
+          ok: wrongSuccess,
+          error: { code: 'INVALID_ARGUMENT', message: pointers[args[1]] },
+          actionStatus: 'not_started',
+          completed: 0,
+        },
+      };
+    };
+    try {
+      expect(regression.testAdvancedInputContract(run, 'task', 'fixture-log')).toEqual({
+        rejectedBeforeDispatch: 7,
+        freeCdpParams: true,
+      });
+      leaked = true;
+      expect(() => regression.testAdvancedInputContract(run, 'task', 'fixture-log')).toThrow(
+        'reached Native Messaging',
+      );
+      leaked = false;
+      wrongSuccess = true;
+      expect(() => regression.testAdvancedInputContract(run, 'task', 'fixture-log')).toThrow(
+        'non-zero exit status',
+      );
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+
   test('requires observed HTTPS CSP enforcement, not merely a successful eval response', async () => {
     const evidence = {
       origin: 'https://github.com',
@@ -119,6 +195,9 @@ describe('CLI-only regression harness', () => {
     expect(() => regression.parseCliRun({ stdout: 'not-json' }, 'invalid fixture')).toThrow(
       'did not print one JSON response',
     );
+    expect(() =>
+      regression.parseCliRun({ stdout: '', status: 1, stderr: 'child failure' }, 'empty fixture'),
+    ).toThrow('status=1; signal=undefined; stderr=child failure');
   });
 
   test('keeps CLI JSON on non-zero exit and rejects invalid JSON from a child process', () => {

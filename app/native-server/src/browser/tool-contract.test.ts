@@ -1,7 +1,11 @@
 import { describe, expect, jest, test } from '@jest/globals';
 import { NativeMessageType, TOOL_SCHEMAS } from 'aieasybrowser-shared';
 import type { NativeMessagingHost } from '../native-messaging-host';
-import { dispatchBrowserTool, validateBrowserToolArguments } from './tool-dispatch';
+import {
+  dispatchBrowserTool,
+  getBrowserToolDefinition,
+  validateBrowserToolArguments,
+} from './tool-dispatch';
 
 const EXPECTED_TOOLS = [
   'chrome_health',
@@ -45,6 +49,79 @@ const EXPECTED_TOOLS = [
   'chrome_handle_dialog',
 ];
 
+const VALID_REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
+  chrome_query_elements: { selector: '#fixture' },
+  chrome_computer: { action: 'fill_form', elements: [{ selector: '#fixture', value: false }] },
+  chrome_clipboard: { action: 'read_text' },
+  chrome_wait_for: { condition: { kind: 'text', text: 'fixture' } },
+  chrome_assert: { condition: { kind: 'text', text: 'fixture' } },
+  chrome_switch_tab: { tabId: 7 },
+  chrome_tab_group: { action: 'list' },
+  chrome_network_request: { url: 'https://fixture.test/' },
+  chrome_network_capture: { action: 'stop' },
+  chrome_javascript: { code: 'return 1' },
+  chrome_cdp_command: { method: 'Page.getFrameTree' },
+  chrome_cdp_batch: { commands: [{ method: 'Page.getFrameTree' }] },
+  chrome_fill_or_select: { value: false },
+  chrome_keyboard: { keys: 'Enter' },
+  chrome_upload_file: { selector: '#fixture' },
+  chrome_handle_dialog: { action: 'dismiss' },
+};
+
+const INVALID_ARGS: Array<[string, Record<string, unknown>, string]> = [
+  ['chrome_javascript', {}, 'args/code'],
+  ['chrome_javascript', { code: false }, 'args/code'],
+  ['chrome_switch_tab', { tabId: '7' }, 'args/tabId'],
+  ['chrome_list_frames', { includeDetails: 'false' }, 'args/includeDetails'],
+  ['chrome_list_frames', { tabId: null }, 'args/tabId'],
+  ['chrome_clipboard', { action: 'delete' }, 'args/action'],
+  ['chrome_wait_for', { condition: {} }, 'args/condition/kind'],
+  ['chrome_wait_for', { condition: 'text' }, 'args/condition'],
+  ['chrome_wait_for', { condition: { kind: 'invalid' } }, 'args/condition/kind'],
+  ['chrome_wait_for', { condition: { kind: 'text', text: 1 } }, 'args/condition/text'],
+  ['chrome_wait_for', { condition: { kind: 'text', extra: true } }, 'args/condition/extra'],
+  ['chrome_click_element', { coordinates: { x: 0 } }, 'args/coordinates/y'],
+  ['chrome_click_element', { coordinates: { x: 0, y: '1' } }, 'args/coordinates/y'],
+  ['chrome_click_element', { modifiers: { ctrlKey: 1 } }, 'args/modifiers/ctrlKey'],
+  ['chrome_close_tabs', { tabIds: '7' }, 'args/tabIds'],
+  ['chrome_close_tabs', { tabIds: [7, '8'] }, 'args/tabIds/1'],
+  ['chrome_cdp_batch', { commands: [null] }, 'args/commands/0'],
+  ['chrome_cdp_batch', { commands: [{}] }, 'args/commands/0/method'],
+  [
+    'chrome_cdp_batch',
+    { commands: [{ method: 'Page.getFrameTree', extra: true }] },
+    'args/commands/0/extra',
+  ],
+  [
+    'chrome_cdp_batch',
+    { commands: [{ method: 'Page.getFrameTree', params: [] }] },
+    'args/commands/0/params',
+  ],
+  [
+    'chrome_computer',
+    { action: 'fill_form', elements: [{ selector: '#fixture' }] },
+    'args/elements/0/value',
+  ],
+  [
+    'chrome_computer',
+    { action: 'fill_form', elements: [{ value: null }] },
+    'args/elements/0/value',
+  ],
+  ['chrome_computer', { action: 'fill', value: {} }, 'args/value'],
+  ['chrome_fill_or_select', { value: [] }, 'args/value'],
+  ['chrome_fill_or_select', { value: null }, 'args/value'],
+  ['chrome_network_request', { url: 'https://fixture.test/', headers: [] }, 'args/headers'],
+  [
+    'chrome_network_request',
+    { url: 'https://fixture.test/', formData: 'field=value' },
+    'args/formData',
+  ],
+  ['chrome_health', { 'a/b~c': true }, 'args/a~1b~0c'],
+  ['chrome_scan_compact', { maxElements: NaN }, 'args/maxElements'],
+  ['chrome_scan_compact', { maxElements: Infinity }, 'args/maxElements'],
+  ['chrome_scan_compact', { maxElements: -Infinity }, 'args/maxElements'],
+];
+
 function expectDeclaredObjectsClosed(value: unknown) {
   if (Array.isArray(value)) {
     value.forEach(expectDeclaredObjectsClosed);
@@ -59,6 +136,49 @@ function expectDeclaredObjectsClosed(value: unknown) {
 }
 
 describe('direct browser capability contracts', () => {
+  test('inventories every schema keyword without treating property names or descriptions as schemas', () => {
+    const counts: Record<string, number> = {};
+    const visit = (schema: Record<string, any>) => {
+      for (const keyword of Object.keys(schema)) counts[keyword] = (counts[keyword] || 0) + 1;
+      for (const child of Object.values(schema.properties || {}))
+        visit(child as Record<string, any>);
+      if (schema.items) visit(schema.items);
+      for (const child of schema.oneOf || []) visit(child);
+    };
+    for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
+    expect(counts).toEqual({
+      type: 383,
+      properties: 49,
+      required: 45,
+      additionalProperties: 49,
+      description: 303,
+      enum: 29,
+      oneOf: 2,
+      items: 4,
+    });
+  });
+
+  test('fails compilation rather than ignoring an unknown schema constraint', () => {
+    const shared = jest.requireActual(
+      'aieasybrowser-shared',
+    ) as typeof import('aieasybrowser-shared');
+    jest.doMock('aieasybrowser-shared', () => ({
+      ...shared,
+      TOOL_SCHEMAS: [
+        { ...shared.TOOL_SCHEMAS[0], inputSchema: { type: 'object', misspelledConstraint: true } },
+      ],
+    }));
+    try {
+      expect(() =>
+        jest.isolateModules(() => {
+          require('./tool-dispatch');
+        }),
+      ).toThrow('unknown keyword');
+    } finally {
+      jest.dontMock('aieasybrowser-shared');
+    }
+  });
+
   test('keeps all 39 browser capabilities unique and discoverable', () => {
     expect(TOOL_SCHEMAS.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
     expect(new Set(EXPECTED_TOOLS).size).toBe(39);
@@ -97,24 +217,124 @@ describe('direct browser capability contracts', () => {
     const controller = new AbortController();
     const execution = { signal: controller.signal };
     const context = { transport: 'cli', sessionId: 'task', requestId: 'request' };
+    const args = VALID_REQUIRED_ARGS[name] ?? {};
     expect(
       await dispatchBrowserTool(
         {
           sendRequestToExtensionAndWait: send,
         } as unknown as NativeMessagingHost,
         name,
-        {},
+        args,
         context,
         execution,
       ),
     ).toEqual(data);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith(
-      { name, args: {}, context },
+      { name, args, context },
       NativeMessageType.CALL_TOOL,
       expect.any(Number),
       execution,
     );
+  });
+
+  test.each(EXPECTED_TOOLS)('describes %s without requiring call arguments', (name) => {
+    expect(getBrowserToolDefinition(name)).toBe(TOOL_SCHEMAS.find((tool) => tool.name === name));
+  });
+
+  test.each(TOOL_SCHEMAS.filter((tool) => tool.inputSchema.required?.length))(
+    'rejects missing required arguments for $name',
+    (tool) => {
+      expect(() => validateBrowserToolArguments(tool.name, {})).toThrow(
+        'args/' + tool.inputSchema.required![0],
+      );
+    },
+  );
+
+  test.each(INVALID_ARGS)(
+    'rejects %s %j at %s without browser IO or input mutation',
+    async (name, args, pointer) => {
+      const original = structuredClone(args);
+      const send = jest.fn<NativeMessagingHost['sendRequestToExtensionAndWait']>();
+      await expect(
+        dispatchBrowserTool(
+          { sendRequestToExtensionAndWait: send } as unknown as NativeMessagingHost,
+          name,
+          args,
+          {},
+        ),
+      ).rejects.toThrow(pointer);
+      expect(send).not.toHaveBeenCalled();
+      expect(args).toEqual(original);
+    },
+  );
+
+  test.each(['text', false, 0])('preserves declared union and oneOf value %j', (value) => {
+    for (const [name, args] of [
+      ['chrome_fill_or_select', { value }],
+      ['chrome_computer', { action: 'fill', value }],
+      ['chrome_computer', { action: 'fill_form', elements: [{ value }] }],
+    ] as const)
+      expect(() => validateBrowserToolArguments(name, args)).not.toThrow();
+  });
+
+  test('preserves open maps and omitted defaults without inventing constraints from prose', () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      [
+        'chrome_network_request',
+        {
+          url: 'https://fixture.test/',
+          headers: { 'X-Custom': 'value' },
+          formData: { fields: { enabled: false }, files: [] },
+        },
+      ],
+      [
+        'chrome_cdp_command',
+        {
+          method: 'Runtime.evaluate',
+          params: { expression: '1', nested: { value: [1, true, null] } },
+        },
+      ],
+      [
+        'chrome_network_request',
+        {
+          url: 'https://fixture.test/',
+          method: 'POST',
+          formData: [
+            ['fixture', 'value'],
+            ['file', 'base64:SGk=', 'fixture.txt'],
+          ],
+        },
+      ],
+      [
+        'chrome_cdp_batch',
+        {
+          commands: [
+            { method: 'Runtime.evaluate', params: { expression: '1', arbitrary: { value: true } } },
+          ],
+        },
+      ],
+      ['chrome_close_tabs', { tabIds: [] }],
+      ['chrome_cdp_batch', { commands: [] }],
+      ['chrome_scan_compact', { maxElements: 0, maxTextBlocks: -1 }],
+      ['chrome_scan_compact', { maxElements: 200.5, frameId: Number.MAX_SAFE_INTEGER }],
+      ['chrome_screenshot', { quality: 0.3 }],
+      ['chrome_screenshot', { quality: 0.95 }],
+      ['chrome_list_frames', {}],
+    ];
+    for (const [name, args] of cases) {
+      const original = structuredClone(args);
+      validateBrowserToolArguments(name, args);
+      expect(args).toEqual(original);
+    }
+  });
+
+  test('does not accept inherited properties as required input', () => {
+    const inherited = Object.create({ code: 'return 1' });
+    expect(() => validateBrowserToolArguments('chrome_javascript', inherited)).toThrow('args/code');
+    expect(() =>
+      validateBrowserToolArguments('chrome_javascript', { code: 'return 1' }),
+    ).not.toThrow();
   });
 
   test.each([
@@ -140,7 +360,9 @@ describe('direct browser capability contracts', () => {
   );
 
   test.each([null, [], 'text'])('rejects non-object tool arguments %j', (args) => {
-    expect(() => validateBrowserToolArguments('chrome_health', args)).toThrow('must be an object');
+    expect(() => validateBrowserToolArguments('chrome_health', args)).toThrow(
+      'at args: must be object',
+    );
   });
 
   test('reports native transport failure instead of hiding it', async () => {

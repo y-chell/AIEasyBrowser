@@ -12,7 +12,12 @@ import {
   type BrowserCommandResponse,
   type ScanOptions,
 } from './protocol';
-import { dispatchBrowserTool, ToolInputError, validateBrowserToolArguments } from './tool-dispatch';
+import {
+  dispatchBrowserTool,
+  getBrowserToolDefinition,
+  ToolInputError,
+  validateBrowserToolArguments,
+} from './tool-dispatch';
 import { logger, startTimer } from '../util/diag-log';
 
 interface ElementTarget {
@@ -638,9 +643,9 @@ export class BrowserCommandService {
         }));
       }
       case 'describe':
-        return validateBrowserToolArguments(command.tool, {});
+        return getBrowserToolDefinition(command.tool);
       case 'call': {
-        const tool = validateBrowserToolArguments(command.tool, command.args);
+        const tool = getBrowserToolDefinition(command.tool);
         const args = { ...command.args };
         if (
           'tabId' in (tool.inputSchema.properties || {}) &&
@@ -648,6 +653,7 @@ export class BrowserCommandService {
           session.tabId !== undefined
         )
           args.tabId = session.tabId;
+        validateBrowserToolArguments(command.tool, args);
         if (
           command.tool === 'chrome_close_tabs' &&
           args.tabIds === undefined &&

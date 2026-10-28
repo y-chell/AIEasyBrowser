@@ -50,6 +50,7 @@
     "chalk": "^5.4.1",
     "chrome-devtools-frontend": "^1.0.1299282",
     "aieasybrowser-shared": "workspace:*",
+    "ajv": "8.20.0",
     "commander": "^13.1.0",
     "fastify": "^5.3.2",
     "node-fetch": "2",

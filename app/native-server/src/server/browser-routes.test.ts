@@ -53,6 +53,42 @@ const post = (
   });
 
 describe('direct browser HTTP route', () => {
+  test.each([
+    ['chrome_javascript', {}, 'args/code'],
+    ['chrome_switch_tab', { tabId: '7' }, 'args/tabId'],
+    ['chrome_screenshot', { savePng: 'false' }, 'args/savePng'],
+    ['chrome_clipboard', { action: 'delete' }, 'args/action'],
+    ['chrome_wait_for', { condition: { kind: 'text', extra: true } }, 'args/condition/extra'],
+    ['chrome_cdp_batch', { commands: [{}] }, 'args/commands/0/method'],
+    ['chrome_fill_or_select', { value: null }, 'args/value'],
+  ])(
+    'returns HTTP 400 for invalid advanced input %s before Native Messaging',
+    async (tool, args, pointer) => {
+      const response = await post({ command: 'call', tool, args });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        ok: false,
+        error: { code: 'INVALID_ARGUMENT', message: expect.stringContaining(pointer as string) },
+        actionStatus: 'not_started',
+        completed: 0,
+      });
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  test('dispatches legal free CDP params unchanged over the HTTP route', async () => {
+    const args = {
+      method: 'Runtime.evaluate',
+      tabId: 7,
+      params: { expression: '1', arbitrary: { list: [true, 0, null] } },
+    };
+    expect((await post({ command: 'call', tool: 'chrome_cdp_command', args })).statusCode).toBe(
+      200,
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].args).toEqual(args);
+  });
+
   test('executes JSON commands without an MCP session or initialize/tools/list', async () => {
     const response = await post({ command: 'health' });
     expect(response.statusCode).toBe(200);
