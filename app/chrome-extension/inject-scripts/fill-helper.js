@@ -24,13 +24,19 @@ if (window.__FILL_HELPER_INITIALIZED__) {
         } catch (e) {
           // ignore
         }
-        if (!element || !(element instanceof Element)) {
+        if (!element || !(element instanceof Element) || !element.isConnected) {
           return {
-            error: `Element ref "${ref}" not found. Please call chrome_read_page first and ensure the ref is still valid.`,
+            error: `STALE_REF: Element ref "${ref}" is detached or expired; scan again.`,
           };
         }
       } else {
-        element = document.querySelector(selector);
+        const matches = document.querySelectorAll(selector);
+        if (matches.length > 1)
+          return {
+            error:
+              'NOT_INTERACTABLE: selector matches multiple elements; use a unique selector or ref',
+          };
+        element = matches[0];
       }
       if (!element) {
         return {
@@ -145,6 +151,17 @@ if (window.__FILL_HELPER_INITIALIZED__) {
       ) {
         return {
           error: `Input element with selector "${selector}" has type "${element.type}" which is not fillable`,
+          elementInfo,
+        };
+      }
+
+      if (
+        element.matches(':disabled') ||
+        element.readOnly ||
+        element.closest('[aria-disabled="true"], [inert]')
+      ) {
+        return {
+          error: 'NOT_INTERACTABLE: form control is disabled, readonly, or inert',
           elementInfo,
         };
       }

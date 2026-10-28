@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"
+  ><head
+    ><meta charset="utf-8" /><title>Cross-origin frame</title></head
+  >
+  <body style="margin: 0">
+    <button
+      id="frame-target"
+      data-count="0"
+      data-trusted="false"
+      style="position: absolute; left: 30px; top: 20px; width: 180px; height: 50px"
+      >Trusted frame button</button
+    >
+    <script>
+      document.addEventListener('click', (event) => {
+        document.querySelector('button').dataset.lastEvent = JSON.stringify({
+          x: event.clientX,
+          y: event.clientY,
+          trusted: event.isTrusted,
+          target: event.target.id,
+        });
+      });
+      document.querySelector('button').onclick = (event) => {
+        const target = event.currentTarget;
+        target.dataset.trusted = String(event.isTrusted);
+        if (event.isTrusted) target.dataset.count = String(Number(target.dataset.count) + 1);
+      };
+    </script>
+  </body></html
+>

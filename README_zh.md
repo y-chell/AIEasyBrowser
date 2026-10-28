@@ -167,6 +167,8 @@ aieasybrowser --session github act '[{"op":"fill","ref":"<ref>","value":"terms"}
 
 JavaScript 条件复用 `chrome_javascript` 的执行引擎：顶层页面默认使用 CDP，不再在网页 MAIN world 中动态 eval 条件字符串，可能显示 Chrome 调试提示；显式非零 `frameId` 使用该工具的 ISOLATED frame 执行，访问的是该 world 的环境。需要 iframe 的页面主世界或跨域 CDP context 时，使用已有 CDP 工具。执行、语法或序列化错误会立即失败，不再当作“条件暂未满足”反复等待；要等待尚不存在的对象，谓词应显式返回 `false`，而不是解引用空对象。
 
+P4 实测发现当前 MV3 构建的显式非零 frame 动态 JS 路径被扩展 CSP 拒绝；它会明确失败，不会自动转到顶层执行。该路径尚未修复，不能视作 iframe JS/JavaScript 条件已验收。frame 内 DOM 读取使用带 `frameId` 的 scan/query；自定义 iframe JavaScript 需使用明确选定 context 的 CDP，不应修改 CSP 放行动态 eval。
+
 默认扫描最多返回 40 个元素、10 个文本块、20 个 frame 摘要和 10 条 frame 错误，元素/文本限制是整页全局预算，而非每个 iframe 单独计算。`truncated: true` 或非空 `errors` 不代表已经看到完整页面；可指定 `scan --frame <id>` 或调整预算。表单值不自动回显，受保护字段会标记 `protected`。
 
 每条操作命令 stdout 输出一份 JSON。退出码：`0` 成功、`2` 参数错误、`3` 操作或超时失败、`4` 连接、授权或响应错误、`130` 取消。默认整条命令超时 60 秒，可用 `--timeout <毫秒>` 调整，最大 120 秒。
@@ -176,6 +178,7 @@ JavaScript 条件复用 `chrome_javascript` 的执行引擎：顶层页面默认
 - `expect` / `scan` 阶段失败且 `actionStatus: "completed"`：动作已经执行，不要因为验证失败重做动作。
 - `actionStatus: "unknown"`：超时、断开或执行失败时，已发出的动作可能已经发生；先观察页面，再决定是否重试。
 - `STALE_REF` / `STALE_DOCUMENT`：重新扫描，不把旧引用替换成看起来相似的 `ref_1`。
+- `NOT_INTERACTABLE`：检查 disabled、readonly、inert、遮挡或选择器多匹配，不强行重放。click/fill 在明确的执行前拒绝时返回 `not_started`；批次此前已完成的动作仍计入 `completed`。
 - `SESSION_BUSY`：同一任务已有命令执行中，不交错发送整条工作流。不同 session 也不保证并发修改同一个页面安全。
 
 新扫描、动作、目标切换、导航、`eval` 和高级 `call` 都会让旧句柄过期；`--no-scan` 只是不输出新扫描，仍会使旧引用失效。刷新或跨文档导航会额外触发文档身份检查。同 URL 的 SPA 更新可能仍是同一文档，引用的元素若已从 DOM 移除，底层工具仍会明确报错。
@@ -196,6 +199,14 @@ aieasybrowser --session github session --forget
 高级 `call` 在浏览器 IO 前按 `describe` 返回的完整输入 schema 校验必填项、类型、枚举、嵌套对象及数组条目。非法参数返回 `INVALID_ARGUMENT`、退出码 `2`，错误中的 `args/commands/0/method` 等路径使用 JSON Pointer（属性名中的 `~` 和 `/` 分别写成 `~0`、`~1`）。此前能传到扩展的非法输入现在会提前拒绝，不使已有 ref 失效；通过校验并执行的 `call` 仍会使旧 ref 失效。
 
 校验不把字符串 `"false"` 改成布尔值、不删多余字段、不填默认值；headers 和 CDP params 等未声明固定字段的 map 保持开放；formData 保留现有对象与紧凑数组两种写法。schema 目前未声明数值范围、整数或数组长度约束，描述里的上限不是新增校验规则；工具原有运行时限制仍有效。`describe` 无需提供工具调用的必填参数。
+
+### 点击与坐标边界
+
+普通 click/ref 和 `chrome_computer` 的 ref/selector 单击使用合成 DOM 事件。`chrome_computer` 的坐标单击使用 CDP trusted input，不再先尝试 DOM、失败后换通道重放。需要 `event.isTrusted` 的控件应使用当前实测坐标或显式 CDP。工具成功只证明事件已派发，必须另查预期效果；无效果不自动升级成双击。
+
+`chrome_computer` 的坐标、拖动起点和区域始终为**当前顶层 viewport CSS 像素**，不受历史截图影响。旧实现会按截图上下文隐式缩放，这一行为已移除；依赖旧缩放的调用方需自行转换图像坐标。未缩放 viewport PNG 的物理像素约为 viewport × DPR；缩略图、裁剪图或整页图还要考虑各自尺寸、原点及当前滚动，不能一律除以 DPR。优先用当前 `getBoundingClientRect()`，布局变化后重新测量。iframe 内坐标需转换到顶层 viewport；跨域限制不等于无法扫描该 frame，也不使 ref 点击变成 trusted input。
+
+当前 Chrome 156 的跨站 iframe 样本中，trusted 坐标点击只到达 iframe 容器，子控件计数仍为 0；前台和后台均复现。此路径未修复，不保证跨域 trusted 输入可用；必须核对子 frame 状态，不能把输入 API 成功当作交互完成。
 
 ## 本机连接配置
 
@@ -251,6 +262,7 @@ pnpm run typecheck
 pnpm lint
 pnpm test
 pnpm test:cli-regression
+pnpm test:cli-long-task
 pnpm run build
 ```
 
@@ -259,6 +271,16 @@ pnpm run build
 脚本启动本机临时网页，创建两个随机 URL 的本机测试标签和一个带随机 query 的 GitHub HTTPS 测试副本；需要能访问 `https://github.com/`。只在新标签中填写测试值、刷新、运行脚本和插入随后移除的 CSP 探针，不改账号、原有标签或剪贴板。结束时关闭测试标签、忘记测试任务并退出临时服务；失败或清理失败都以非零状态报告，不把前置条件缺失写成跳过通过。成功 JSON 中 `commands` 包含清理阶段的 CLI 调用。
 
 单元测试覆盖 CLI 参数、命名任务、动作/验证/扫描、输入能力契约、本机安全边界、取消与目标锁；旧协议入口返回 404。真实浏览器脚本额外检查跨进程引用、同 URL 刷新、动作后置条件、超时/断开后的迟到失败与目标锁，以及真实 HTTPS 的 CSP。Windows 的 SIGINT 样本验证客户端终止和断开续查，不等于已验证 POSIX 的退出码 130 分支。结果和未验证范围维护在 `docs/KNOWN-ISSUES.md`，不把这些样本通过等同于所有网站和全部高级工具都已验收。
+
+### 固定长程比较
+
+`pnpm test:cli-long-task` 同样先构建 shared/native，要求 Chrome 中已重载待测扩展。默认交替顺序运行 3 对逐字段命令与 `act` 批次；可在命令末尾追加 `1..10` 指定对数。两组使用相同页面、输入、40 元素/10 文本预算，执行读取、5 字段填写、异步保存、跨标签读取、刷新、旧 document 拒绝和后置条件失败后的只读观察。
+
+JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agentEquivalentCalls` 是脚本模拟的 Agent CLI 调用数，不是模型调用数；`coldCliWallMs` 是每次新启 CLI 进程的完整耗时之和，不是仅启动耗时，也不含模型思考。`browserRoundTripMs` 关联诊断日志中的扩展终态耗时，包含 IPC/排队，不是纯浏览器 CPU 时间。比较区间不含建页/清理及额外定位验收；字节、工具数或 wall time 的变化不等于模型 token 或任意网站任务的同等改善。
+
+额外验收 detached/disabled/遮挡/重复目标、实际 PNG 尺寸与 DPR、滚动/布局更新、整页截图后坐标不变，以及跨域 iframe 的 synthetic/trusted 差异和不存在 frame 的错误。fixture 服务只绑定回环，iframe 使用同端口 localhost 与 127.0.0.1 构成跨源；不需要外网。只在本轮随机 URL 标签和唯一 storage key 上产生副作用，结束逐项清除 storage、关闭标签、忘记任务并退出服务；截图只在内存，不下载文件，不改用户账号、剪贴板或原有标签，也不启停原有 trace/抓包。失败和清理失败均非零退出；不支持的浏览器前置条件不记作通过。
+
+脚本 `ok=true` 表示固定工作流、严格防误操作断言及观测/清理完成，不表示全部能力可用。额外跨 frame 输入探针在未送达子控件时输出 `geometry.trustedFramePassed=false`、`frameInputStatus=container_only` 和显式 `limitations`；只有拿到容器事件及子控件计数证据才接受这类已知限制，不把未知失败、重复副作用或缺失证据当通过。跨域探针会短暂激活本轮测试标签，结束关闭；不对用户原有标签发送激活或导航命令。
 
 ## 许可证
 

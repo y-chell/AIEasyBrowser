@@ -6,13 +6,15 @@ const path = require('node:path');
 
 const runId = process.argv[2];
 const template = fs.readFileSync(path.join(__dirname, 'cli-regression.html'), 'utf8');
+const longTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-task.html'), 'utf8');
+const frameTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-frame.html'), 'utf8');
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || '/', 'http://127.0.0.1');
   if (url.pathname === '/favicon.ico') {
     response.writeHead(204).end();
     return;
   }
-  if (request.method !== 'GET' || url.pathname !== '/') {
+  if (request.method !== 'GET' || !['/', '/long', '/long-frame'].includes(url.pathname)) {
     if (request.method === 'GET' && url.pathname === '/signal') {
       const name = url.searchParams.get('name');
       if (!['timeout-start', 'timeout-end', 'disconnect-start', 'disconnect-end'].includes(name)) {
@@ -37,7 +39,15 @@ const server = http.createServer((request, response) => {
     'Cache-Control': 'no-store',
   });
   response.end(
-    template.replaceAll('@@TAG@@', escapeHtml(tag)).replaceAll('@@RUN_ID@@', escapeHtml(runId)),
+    (url.pathname === '/long'
+      ? longTemplate
+      : url.pathname === '/long-frame'
+        ? frameTemplate
+        : template
+    )
+      .replaceAll('@@TAG@@', escapeHtml(tag))
+      .replaceAll('@@RUN_ID@@', escapeHtml(runId))
+      .replaceAll('@@FRAME_URL@@', 'http://localhost:' + server.address().port + '/long-frame'),
   );
 });
 

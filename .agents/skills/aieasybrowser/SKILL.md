@@ -36,9 +36,11 @@ Group a short, known sequence with `act`; it executes in order, checks the optio
 aieasybrowser --session research act '[{"op":"fill","ref":"<ref>","value":"terms"},{"op":"press","keys":"Enter"}]' --expect '{"kind":"element","selector":"#results","state":"visible"}'
 ```
 
+Batch independent fields whose targets remain stable; stop to observe between steps that change the page. This avoids a new CLI process and scan for every field, not the underlying actions or their checks.
+
 Postconditions support `element`, `text`, `url`, `title`, synchronous `javascript`, and `networkIdle`. For URL/title, use an explicit `value` and `match` (`contains`, `equals`, or `regex`), not an after-the-fact "changed" baseline. Prefer a site-specific postcondition for asynchronous actions; a successful click alone does not prove the intended effect.
 
-JavaScript conditions use the existing JS engine: CDP for the top frame (potential debugger notification), ISOLATED execution for an explicit nonzero frame ID. Use advanced CDP tools for an iframe's page-main-world globals. Execution errors fail immediately; when waiting for an absent object, return false rather than dereferencing null.
+JavaScript conditions use the existing JS engine: CDP for the top frame (potential debugger notification), ISOLATED execution for an explicit nonzero frame ID. The current MV3 build rejects dynamic JS in that ISOLATED path with a CSP error; do not treat it as an unsatisfied condition or relax CSP. Use frame-scoped scan/query tools for DOM reads and explicit CDP contexts for iframe JavaScript. Execution errors fail immediately; when waiting for an absent object, return false rather than dereferencing null.
 
 Use `wait '<condition-json>'` to wait and rescan without repeating an action. The overall deadline is `--timeout <ms>` (default 60000, maximum 120000). JSON arguments accept `@file` or `@-` for stdin, avoiding shell-quoting problems.
 
@@ -46,6 +48,7 @@ Use `wait '<condition-json>'` to wait and rescan without repeating an action. Th
 
 - Only the latest successful scan's refs in this named session are usable. A new scan, action command, `use`, `open`, `eval`, or advanced `call` expires earlier handles. `--no-scan` suppresses output, not invalidation.
 - Handles bind the frame's Chrome document ID. Navigation or refresh, even to the same URL, invalidates them. On `STALE_REF` or `STALE_DOCUMENT`, scan again; do not substitute a similar raw ref.
+- A same-document DOM replacement can also detach a ref. Click/fill reject detached nodes; `NOT_INTERACTABLE` rejects disabled/inert controls, ambiguous selectors, blocked clicks, and readonly fills. Inspect the cause and rescan instead of forcing the old target.
 - Commands print one JSON response. Check `ok`, not just whether stdout exists. On failure inspect `phase`, `actionStatus`, `completed`, and `failedAction`.
 - `phase: "expect"` or `"scan"` with `actionStatus: "completed"` means the actions already ran. Fix the check or observe the page; do not blindly replay them.
 - `actionStatus: "unknown"` means a sent action may have happened, including after timeout/disconnection. Observe the target before considering another mutation. A failed batch's `completed` count covers only confirmed actions.
@@ -56,7 +59,7 @@ Exit codes: `0` success, `2` invalid arguments, `3` operation/timeout failure, `
 
 ## Coordinates and trusted input
 
-`chrome_computer` coordinates are **viewport CSS pixels**. Saved screenshots are written at `viewport × devicePixelRatio`, so on a 1.25 DPR display a 1536×695 viewport produces a 1920×869 PNG. Measuring a target in that PNG and passing the numbers straight to `coordinates` lands up and to the left of the real element. Get the click point from the page instead — `getBoundingClientRect()` and the `elementInfo.rect` echoed by a click response are both already in CSS pixels and can be reused directly:
+`chrome_computer` coordinates are always **current top-level viewport CSS pixels**, independent of previous screenshots. An unscaled viewport PNG is `viewport × devicePixelRatio`, so on a 1.25 DPR display a 1536×695 viewport produces a 1920×869 PNG. Passing PNG pixels straight to `coordinates` overshoots down and right. Resized, cropped, or full-page images need their own scale/origin conversion, not just division by DPR. Prefer the current page geometry — `getBoundingClientRect()` and the `elementInfo.rect` echoed by a click response are already in CSS pixels:
 
 ```sh
 aieasybrowser --session task use 123
@@ -65,11 +68,11 @@ aieasybrowser --session task eval 'const r = document.querySelector("#target").g
 
 Re-measure after any layout shift. A toast, a cookie banner, or a fixed bottom card changes `y` for the whole page, and the numbers you measured a minute ago no longer point at the element.
 
-`chrome_computer` dispatches `Input.dispatchMouseEvent`, which is trusted input. Prefer it over DOM `.click()` when a control checks `event.isTrusted`, and over `ref`-based clicks when the element lives in a cross-origin frame.
+`chrome_computer` coordinate clicks dispatch `Input.dispatchMouseEvent`, which is trusted input; ref/selector single clicks remain synthetic. Prefer coordinates over DOM `.click()` for a top-frame control that checks `event.isTrusted`. A cross-origin frame can support scanned refs, but that does not prove trusted input reaches its child surface: the current Chrome 156 cross-site fixture receives the trusted click only at its iframe container. Verify the child state; do not claim success or replay the click based on the tool response.
 
-A single `left_click` is not always enough. Some widgets (Cloudflare Turnstile among them) ignore one synthesized press/release pair but accept a `double_click` at the same point. The rule that generalizes: **when a click reports success but the widget state does not change, retry once with `double_click` before concluding the target is unclickable.** Do not report a click as working based on its response — verify the effect.
+A successful click response does not prove the intended effect. Wait or inspect the page first; do not automatically retry with `double_click` after a failed check or an unknown outcome. A new attempt requires evidence that the previous action did not run, or a known idempotent operation within the task's scope. Double-click is a distinct action, not a generic recovery step.
 
-Cross-origin widgets render inside iframes the main document cannot see. `Page.getFrameTree` may not list them while `chrome_list_frames` reports the frame ID and title, and `scan --frame <id>` can fail with `Frame documentId is unavailable`. None of that means the widget failed to render. If the container has a real bounding box, click it by coordinate.
+Cross-origin widgets render inside iframes the main document cannot see. `Page.getFrameTree` may not list them while `chrome_list_frames` reports the frame ID and title, and `scan --frame <id>` can fail with `Frame documentId is unavailable`. None of that means the widget failed to render. Locate the actual control using current visual or frame evidence; a container box alone is not proof of its click point.
 
 ## Bot checks and signature parameters
 

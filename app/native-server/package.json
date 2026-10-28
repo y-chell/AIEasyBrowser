@@ -14,6 +14,7 @@
     "test:coverage": "cross-env JEST_COVERAGE=1 jest --coverage",
     "test:watch": "jest --watch",
     "test:cli-regression": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-regression.cjs",
+    "test:cli-long-task": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-long-task.cjs",
     "lint": "eslint 'src/**/*.{js,ts}'",
     "lint:fix": "eslint 'src/**/*.{js,ts}' --fix",
     "format": "prettier --write 'src/**/*.{js,ts,json}'",

@@ -41,9 +41,9 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
           // ignore
         }
 
-        if (!target || !(target instanceof Element)) {
+        if (!target || !(target instanceof Element) || !target.isConnected) {
           return {
-            error: `Element ref "${ref}" not found. Please call chrome_read_page first and ensure the ref is still valid.`,
+            error: `STALE_REF: Element ref "${ref}" is detached or expired; scan again.`,
           };
         }
 
@@ -116,7 +116,13 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
           };
         }
       } else {
-        element = document.querySelector(selector);
+        const matches = document.querySelectorAll(selector);
+        if (matches.length > 1)
+          return {
+            error:
+              'NOT_INTERACTABLE: selector matches multiple elements; use a unique selector or ref',
+          };
+        element = matches[0];
         if (!element) {
           return {
             error: `Element with selector "${selector}" not found`,
@@ -150,7 +156,7 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
         elementInfo.isVisible = isElementVisible(element);
         if (!elementInfo.isVisible) {
           return {
-            error: `Element with selector "${selector}" is not visible`,
+            error: `NOT_INTERACTABLE: Element with selector "${selector}" is not visible`,
             elementInfo,
           };
         }
@@ -158,6 +164,20 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
         const updatedRect = element.getBoundingClientRect();
         clickX = updatedRect.left + updatedRect.width / 2;
         clickY = updatedRect.top + updatedRect.height / 2;
+      }
+
+      // A ref identifies a node, not a promise that it is still actionable. Never
+      // dispatch synthetic events through an overlay or disabled/detached control.
+      if (!element || !element.isConnected)
+        return { error: 'NOT_INTERACTABLE: no connected element at the click target' };
+      if (element.matches(':disabled') || element.closest('[aria-disabled="true"], [inert]')) {
+        return { error: 'NOT_INTERACTABLE: element is disabled or inert' };
+      }
+      if (
+        !isElementVisible(element, clickX, clickY) ||
+        window.getComputedStyle(element).pointerEvents === 'none'
+      ) {
+        return { error: 'NOT_INTERACTABLE: element is hidden, blocked, or not hit-testable' };
       }
 
       let navigationPromise;
@@ -306,7 +326,7 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
    * @param {Element} element - The element to check
    * @returns {boolean} - Whether the element is visible
    */
-  function isElementVisible(element) {
+  function isElementVisible(element, x, y) {
     if (!element) return false;
 
     const style = window.getComputedStyle(element);
@@ -328,8 +348,8 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
       return false;
     }
 
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
+    const centerX = x ?? rect.left + rect.width / 2;
+    const centerY = y ?? rect.top + rect.height / 2;
 
     const elementAtPoint = document.elementFromPoint(centerX, centerY);
     if (!elementAtPoint) return false;

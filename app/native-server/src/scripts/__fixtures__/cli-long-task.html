@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AIEasyBrowser long task</title>
+    <style>
+      body {
+        font: 16px sans-serif;
+        margin: 24px;
+      }
+      label {
+        display: block;
+        margin: 8px 0;
+      }
+      button,
+      input,
+      select {
+        padding: 5px;
+      }
+      #cover-box {
+        position: relative;
+        display: inline-block;
+      }
+      #cover {
+        position: absolute;
+        inset: 0;
+        background: #ccc;
+        z-index: 10;
+      }
+      #geometry {
+        display: none;
+      }
+      body[data-mode='geometry'] #workflow {
+        display: none;
+      }
+      body[data-mode='geometry'] #geometry {
+        display: block;
+        height: 1800px;
+      }
+      #point {
+        position: absolute;
+        left: 280px;
+        top: 700px;
+        width: 100px;
+        height: 40px;
+      }
+      #cross {
+        position: absolute;
+        left: 40px;
+        top: 860px;
+        width: 300px;
+        height: 120px;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="workflow">
+      <h1>Long workflow @@TAG@@</h1>
+      <label>First <input id="first" /></label>
+      <label>Last <input id="last" /></label>
+      <label>Email <input id="email" type="email" /></label>
+      <label
+        >Country
+        <select id="country"
+          ><option value="">Choose</option
+          ><option value="CN">China</option></select
+        ></label
+      >
+      <label><input id="agree" type="checkbox" />Agree</label>
+      <button id="submit">Save</button><button id="fail-once">Count once</button>
+      <p id="status">Ready</p><p id="summary">No saved record</p>
+      <section id="guards">
+        <button id="replace-target">Replaceable</button>
+        <button id="disabled-target" disabled>Disabled</button>
+        <input id="disabled-field" disabled value="unchanged" />
+        <div id="cover-box"
+          ><button id="covered-target">Covered</button><div id="cover">Overlay</div></div
+        >
+        <button id="duplicate-a" class="duplicate">Repeat</button
+        ><button id="duplicate-b" class="duplicate">Repeat</button>
+      </section>
+      <div id="noise"></div>
+    </main>
+    <section id="geometry">
+      <button id="point">Trusted point</button>
+      <iframe id="cross" title="Cross-origin fixture"></iframe>
+    </section>
+    <script>
+      const query = new URLSearchParams(location.search);
+      document.body.dataset.mode = query.get('mode') || 'workflow';
+      if (query.get('mode') === 'geometry') document.querySelector('#cross').src = '@@FRAME_URL@@';
+      else document.querySelector('#cross').remove();
+      const recordKey = 'aieasybrowser-long-' + query.get('record');
+      const clicksKey = recordKey + '-clicks';
+      window.__effects = {
+        detached: 0,
+        replacement: 0,
+        disabled: 0,
+        covered: 0,
+        duplicateA: 0,
+        duplicateB: 0,
+        point: 0,
+        trusted: false,
+      };
+      window.__coordinateEvents = [];
+      document.addEventListener('click', (event) => {
+        if (query.get('mode') === 'geometry')
+          window.__coordinateEvents.push({
+            x: event.clientX,
+            y: event.clientY,
+            trusted: event.isTrusted,
+            target: event.target.id,
+          });
+      });
+      const byId = (id) => document.getElementById(id);
+      const render = () => {
+        const record = JSON.parse(localStorage.getItem(recordKey) || 'null');
+        byId('summary').textContent = record
+          ? 'Saved: ' + record.first + ' ' + record.last
+          : 'No saved record';
+        return record;
+      };
+      const saved = render();
+      if (saved && query.get('tag') === 'A') {
+        for (const id of ['first', 'last', 'email', 'country']) byId(id).value = saved[id];
+        byId('agree').checked = saved.agree;
+      }
+      window.addEventListener('storage', render);
+      byId('submit').onclick = () => {
+        const record = Object.fromEntries(
+          ['first', 'last', 'email', 'country'].map((id) => [id, byId(id).value]),
+        );
+        record.agree = byId('agree').checked;
+        localStorage.setItem(recordKey, JSON.stringify(record));
+        byId('status').textContent = 'Saving';
+        setTimeout(() => {
+          render();
+          byId('status').textContent = 'Complete';
+        }, 250);
+      };
+      byId('fail-once').onclick = () =>
+        sessionStorage.setItem(
+          clicksKey,
+          String(Number(sessionStorage.getItem(clicksKey) || 0) + 1),
+        );
+      byId('replace-target').onclick = () => {
+        window.__effects.detached += 1;
+      };
+      window.__replaceTarget = () => {
+        window.__retiredTarget = byId('replace-target');
+        const fresh = window.__retiredTarget.cloneNode(true);
+        fresh.onclick = () => {
+          window.__effects.replacement += 1;
+        };
+        window.__retiredTarget.replaceWith(fresh);
+      };
+      for (const [id, name] of [
+        ['disabled-target', 'disabled'],
+        ['covered-target', 'covered'],
+        ['duplicate-a', 'duplicateA'],
+        ['duplicate-b', 'duplicateB'],
+      ]) {
+        byId(id).addEventListener('click', () => {
+          window.__effects[name] += 1;
+        });
+      }
+      byId('point').onclick = (event) => {
+        window.__effects.trusted = event.isTrusted;
+        if (event.isTrusted) window.__effects.point += 1;
+      };
+      window.__snapshot = () => ({
+        record: JSON.parse(localStorage.getItem(recordKey) || 'null'),
+        clicks: Number(sessionStorage.getItem(clicksKey) || 0),
+        effects: window.__effects,
+        disabledValue: byId('disabled-field').value,
+        timeOrigin: performance.timeOrigin,
+        readyState: document.readyState,
+      });
+      window.__cleanup = () => {
+        localStorage.removeItem(recordKey);
+        sessionStorage.removeItem(clicksKey);
+        return (
+          localStorage.getItem(recordKey) === null && sessionStorage.getItem(clicksKey) === null
+        );
+      };
+      for (let i = 0; i < 55; i++) {
+        const button = document.createElement('button');
+        button.textContent = 'Noise ' + i;
+        byId('noise').append(button);
+      }
+    </script>
+  </body>
+</html>

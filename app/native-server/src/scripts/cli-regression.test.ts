@@ -152,6 +152,11 @@ describe('CLI-only regression harness', () => {
 
       const missing = await fetch(fixture.origin + '/missing');
       expect(missing.status).toBe(404);
+      const long = await fetch(fixture.origin + '/long?tag=A&record=fixture');
+      expect(await long.text()).toContain('window.__replaceTarget');
+      const frame = await fetch(fixture.origin + '/long-frame');
+      expect(await frame.text()).toContain('event.isTrusted');
+      expect((await fetch(fixture.origin + '/long', { method: 'POST' })).status).toBe(404);
       const observed = fixture.waitForSignal('timeout-start');
       expect((await fetch(fixture.origin + '/signal?name=timeout-start')).status).toBe(204);
       await observed;

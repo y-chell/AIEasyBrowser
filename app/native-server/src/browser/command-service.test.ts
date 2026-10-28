@@ -123,6 +123,47 @@ async function selectedScan(session = 'task') {
 }
 
 describe('named CLI browser workflows', () => {
+  test.each(['STALE_REF', 'NOT_INTERACTABLE'])(
+    'reports helper rejection %s before action as not_started',
+    async (code) => {
+      const ref = await selectedScan();
+      send.mockResolvedValueOnce(failure(code + ': rejected fixture'));
+      expect(
+        await run({ command: 'act', actions: [{ op: 'click', ref }], scan: false }),
+      ).toMatchObject({ ok: false, error: { code }, completed: 0, actionStatus: 'not_started' });
+    },
+  );
+  test('does not infer that arbitrary page JavaScript errors imply no action occurred', async () => {
+    await run({ command: 'use', tabId: 7 });
+    send.mockResolvedValueOnce(failure('NOT_INTERACTABLE: external JavaScript error'));
+    expect(await run({ command: 'eval', code: 'sideEffect(); throw new Error()' })).toMatchObject({
+      ok: false,
+      error: { code: 'BROWSER_ERROR' },
+      actionStatus: 'unknown',
+    });
+  });
+  test('keeps already completed actions when a later helper rejects its target', async () => {
+    const ref = await selectedScan();
+    send
+      .mockResolvedValueOnce(success({ success: true }))
+      .mockResolvedValueOnce(failure('NOT_INTERACTABLE: fixture'));
+    expect(
+      await run({
+        command: 'act',
+        actions: [
+          { op: 'click', ref },
+          { op: 'click', ref },
+        ],
+        scan: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'NOT_INTERACTABLE' },
+      actionStatus: 'partial',
+      completed: 1,
+      failedAction: 1,
+    });
+  });
   test.each(TOOL_SCHEMAS)('describes $name independently of required call input', async (tool) => {
     expect(await run({ command: 'describe', tool: tool.name })).toMatchObject({
       ok: true,

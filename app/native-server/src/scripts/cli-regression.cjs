@@ -864,6 +864,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  runCli,
+  assertOk,
+  assertFailure,
+  pageElements,
+  findRef,
+  jsValue,
   cleanupTargets,
   createFixtureServer,
   interruptCli,

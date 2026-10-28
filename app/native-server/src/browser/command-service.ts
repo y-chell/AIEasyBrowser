@@ -51,7 +51,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function decodeToolResult(result: BrowserToolResult): unknown {
+function decodeToolResult(result: BrowserToolResult, toolName: string): unknown {
   let payload: unknown = result.structuredContent;
   if (payload === undefined) {
     const text = result.content
@@ -76,11 +76,17 @@ function decodeToolResult(result: BrowserToolResult): unknown {
               payload.error?.message || payload.error || payload.message || 'Browser tool failed',
             )
           : 'Browser tool failed';
+    const directInteraction =
+      toolName === 'chrome_click_element' || toolName === 'chrome_fill_or_select';
     const code = /\bSTALE_DOCUMENT:/.test(message)
       ? 'STALE_DOCUMENT'
-      : /\bTARGET_CLOSED:/.test(message)
-        ? 'TARGET_CLOSED'
-        : 'BROWSER_ERROR';
+      : directInteraction && /\bSTALE_REF:/.test(message)
+        ? 'STALE_REF'
+        : directInteraction && /\bNOT_INTERACTABLE:/.test(message)
+          ? 'NOT_INTERACTABLE'
+          : /\bTARGET_CLOSED:/.test(message)
+            ? 'TARGET_CLOSED'
+            : 'BROWSER_ERROR';
     throw new BrowserCommandError(code, message);
   }
   const attachments = result.content.filter((item) => item.type !== 'text');
@@ -239,6 +245,8 @@ export class BrowserCommandService {
       if (
         [
           'STALE_DOCUMENT',
+          'STALE_REF',
+          'NOT_INTERACTABLE',
           'TARGET_CLOSED',
           'INVALID_ARGUMENT',
           'NO_TARGET',
@@ -325,7 +333,7 @@ export class BrowserCommandService {
       signal.throwIfAborted();
       // Decode first: a transport-level success that fails to decode is a tool
       // failure, and must not be logged as tool.ok.
-      const decoded = decodeToolResult(result);
+      const decoded = decodeToolResult(result, name);
       signal.throwIfAborted();
       logger.info({
         event: 'tool.ok',

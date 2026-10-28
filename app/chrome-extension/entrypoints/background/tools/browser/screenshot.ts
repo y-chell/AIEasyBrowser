@@ -343,7 +343,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       }
 
       // 2. Process output
-      // Update screenshot context for coordinate scaling by tools like chrome_computer
+      // Retain capture metadata for domain checks; input coordinates remain CSS pixels.
       try {
         if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
           let hostname = '';

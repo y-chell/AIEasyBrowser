@@ -375,7 +375,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.COMPUTER,
     description:
-      'Use a mouse and keyboard to interact with a web browser, and take screenshots.\n* Prefer chrome_scan_compact, chrome_read_page, refs, or selectors before using coordinates. If you use coordinates, capture the current viewport first and click the element center.\n* Coordinates are viewport CSS pixels for the current tab. Chrome debugger attach/infobar or layout changes can shift the page, so recapture before precise clicks.\n* Use this or chrome_cdp_command/chrome_cdp_batch when JavaScript DOM events are ignored because event.isTrusted is false.\n* If a click does not load after waiting, take a screenshot and adjust the click point so the cursor tip is centered on the target.',
+      'Use a mouse and keyboard to interact with a web browser, and take screenshots.\n* Prefer chrome_scan_compact, chrome_read_page, refs, or selectors before using coordinates. If you use coordinates, capture the current viewport first and click the element center.\n* Coordinates are always viewport CSS pixels for the current tab, independent of previous screenshots. Convert image pixels to current viewport CSS pixels yourself. Chrome debugger attach/infobar or layout changes can shift the page, so remeasure before precise clicks.\n* Coordinate clicks use trusted CDP input; ref/selector left/right clicks use synthetic DOM events. Use coordinates or chrome_cdp_command/chrome_cdp_batch when event.isTrusted is required.\n* Verify the effect after clicking; failed checks and unknown outcomes must not automatically replay an action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -402,7 +402,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
             y: { type: 'number', description: 'Y coordinate' },
           },
           description:
-            'Coordinates for actions (in screenshot space if a recent screenshot was taken, otherwise viewport). Required for click/scroll and as end point for drag.',
+            'Current top-level viewport CSS pixel coordinates, never screenshot pixels. Required for click/scroll and as end point for drag.',
         },
         startCoordinates: {
           type: 'object',

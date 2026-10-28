@@ -1,5 +1,5 @@
 // Simple in-memory screenshot context manager per tab
-// Used to scale coordinates from screenshot space to viewport space
+// Used for screenshot metadata and domain checks, not implicit input scaling.
 
 export interface ScreenshotContext {
   // Final screenshot dimensions (in CSS pixels after any scaling)
@@ -37,17 +37,3 @@ export const screenshotContextManager = {
     contexts.delete(tabId);
   },
 };
-
-// Scale screenshot-space coordinates (x,y) to viewport CSS pixels
-export function scaleCoordinates(
-  x: number,
-  y: number,
-  ctx: ScreenshotContext,
-): { x: number; y: number } {
-  if (!ctx.screenshotWidth || !ctx.screenshotHeight || !ctx.viewportWidth || !ctx.viewportHeight) {
-    return { x, y };
-  }
-  const sx = (x / ctx.screenshotWidth) * ctx.viewportWidth;
-  const sy = (y / ctx.screenshotHeight) * ctx.viewportHeight;
-  return { x: Math.round(sx), y: Math.round(sy) };
-}

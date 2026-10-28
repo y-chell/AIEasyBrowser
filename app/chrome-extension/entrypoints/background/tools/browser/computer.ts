@@ -8,7 +8,7 @@ import { keyboardTool } from './keyboard';
 import { screenshotTool } from './screenshot';
 import { waitForDownload } from './download';
 import { waitForCapturedRequest } from './network-capture';
-import { screenshotContextManager, scaleCoordinates } from '@/utils/screenshot-context';
+import { screenshotContextManager } from '@/utils/screenshot-context';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import type { BrowserToolExecutionContext } from '../browser-session-context';
 
@@ -51,7 +51,7 @@ interface ComputerParams {
     | 'scroll_to'
     | 'zoom'
     | 'screenshot';
-  // click/scroll coordinates in screenshot space (if screenshot context exists) or viewport space
+  // Coordinates always use the current top-level viewport's CSS pixels.
   coordinates?: Coordinates; // for click/scroll; for drag, this is endCoordinates
   startCoordinates?: Coordinates; // for drag start
   // Optional element refs (from chrome_read_page) as alternative to coordinates
@@ -637,15 +637,6 @@ class ComputerTool extends BaseBrowserToolExecutor {
       return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
     }
 
-    // Helper to project coordinates using screenshot context when available
-    const project = (c?: Coordinates): Coordinates | undefined => {
-      if (!c) return undefined;
-      const ctx = screenshotContextManager.getContext(tab.id!);
-      if (!ctx) return c;
-      const scaled = scaleCoordinates(c.x, c.y, ctx);
-      return { x: scaled.x, y: scaled.y };
-    };
-
     switch (params.action) {
       case 'resize_page': {
         const width = Number((params as any).coordinates?.x || (params as any).text);
@@ -719,7 +710,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               ref: params.ref,
             });
             if (resolved && resolved.success) {
-              coord = project({ x: resolved.center.x, y: resolved.center.y });
+              coord = { x: resolved.center.x, y: resolved.center.y };
               resolvedBy = 'ref';
             }
           } else if (params.selector) {
@@ -751,17 +742,17 @@ class ComputerTool extends BaseBrowserToolExecutor {
                   ref: resolvedRef,
                 });
                 if (reResolved && reResolved.success) {
-                  coord = project({ x: reResolved.center.x, y: reResolved.center.y });
+                  coord = { x: reResolved.center.x, y: reResolved.center.y };
                 } else {
-                  coord = project({ x: ensured.center.x, y: ensured.center.y });
+                  coord = { x: ensured.center.x, y: ensured.center.y };
                 }
               } else {
-                coord = project({ x: ensured.center.x, y: ensured.center.y });
+                coord = { x: ensured.center.x, y: ensured.center.y };
               }
               resolvedBy = 'selector';
             }
           } else if (params.coordinates) {
-            coord = project(params.coordinates);
+            coord = params.coordinates;
             resolvedBy = 'coordinates';
           }
         } catch (e) {
@@ -851,26 +842,35 @@ class ComputerTool extends BaseBrowserToolExecutor {
 
         if (params.ref) {
           // Prefer DOM click via ref
-          const domResult = await clickTool.execute({
-            ref: params.ref,
-            waitForNavigation: false,
-            timeout: TIMEOUTS.DEFAULT_WAIT * 5,
-            button: params.action === 'right_click' ? 'right' : 'left',
-            modifiers: params.modifiers,
-          });
+          const domResult = await clickTool.execute(
+            {
+              tabId: tab.id,
+              frameId: params.frameId,
+              ref: params.ref,
+              waitForNavigation: false,
+              timeout: TIMEOUTS.DEFAULT_WAIT * 5,
+              button: params.action === 'right_click' ? 'right' : 'left',
+              modifiers: params.modifiers,
+            },
+            executionContext,
+          );
           return domResult;
         }
         if (params.selector) {
           // Support selector-based click
-          const domResult = await clickTool.execute({
-            selector: params.selector,
-            selectorType: params.selectorType,
-            frameId: params.frameId,
-            waitForNavigation: false,
-            timeout: TIMEOUTS.DEFAULT_WAIT * 5,
-            button: params.action === 'right_click' ? 'right' : 'left',
-            modifiers: params.modifiers,
-          });
+          const domResult = await clickTool.execute(
+            {
+              tabId: tab.id,
+              selector: params.selector,
+              selectorType: params.selectorType,
+              frameId: params.frameId,
+              waitForNavigation: false,
+              timeout: TIMEOUTS.DEFAULT_WAIT * 5,
+              button: params.action === 'right_click' ? 'right' : 'left',
+              modifiers: params.modifiers,
+            },
+            executionContext,
+          );
           return domResult;
         }
         if (!params.coordinates)
@@ -896,19 +896,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
           })();
           if (stale) return stale;
         }
-        const coord = project(params.coordinates)!;
-        // Prefer DOM path via existing click tool
-        const domResult = await clickTool.execute({
-          coordinates: coord,
-          waitForNavigation: false,
-          timeout: TIMEOUTS.DEFAULT_WAIT * 5,
-          button: params.action === 'right_click' ? 'right' : 'left',
-          modifiers: params.modifiers,
-        });
-        if (!domResult.isError) {
-          return domResult; // Standardized response from click tool
-        }
-        // Fallback to CDP if DOM failed
+        const coord = params.coordinates;
+        // Coordinate input must be trusted. Never try DOM first or replay a
+        // possibly completed input through a different transport.
         try {
           await CDPHelper.attach(tab.id);
           const button: MouseButton = params.action === 'right_click' ? 'right' : 'left';
@@ -978,7 +968,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse(
             'Provide ref, selector, or coordinates for double/triple click',
           );
-        let coord = params.coordinates ? project(params.coordinates)! : (undefined as any);
+        let coord = params.coordinates;
         // If ref is provided, resolve center via accessibility helper
         if (params.ref) {
           try {
@@ -994,7 +984,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               ref: params.ref,
             });
             if (resolved && resolved.success) {
-              coord = project({ x: resolved.center.x, y: resolved.center.y })!;
+              coord = { x: resolved.center.x, y: resolved.center.y };
             }
           } catch (e) {
             // ignore and use provided coordinates
@@ -1020,7 +1010,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               params.frameId,
             );
             if (ensured && ensured.success) {
-              coord = project({ x: ensured.center.x, y: ensured.center.y })!;
+              coord = { x: ensured.center.x, y: ensured.center.y };
             }
           } catch (e) {
             // ignore
@@ -1112,10 +1102,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse(
             'Provide ref, selector, endSelector, or end coordinates for drag',
           );
-        let start = params.startCoordinates
-          ? project(params.startCoordinates)!
-          : (undefined as any);
-        let end = params.coordinates ? project(params.coordinates)! : (undefined as any);
+        let start = params.startCoordinates;
+        let end = params.coordinates;
         {
           const stale = ((): any => {
             if (!params.startCoordinates && !params.coordinates) return null;
@@ -1154,7 +1142,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               ref: params.startRef,
             });
             if (resolved && resolved.success)
-              start = project({ x: resolved.center.x, y: resolved.center.y })!;
+              start = { x: resolved.center.x, y: resolved.center.y };
           } catch {
             // ignore
           }
@@ -1170,8 +1158,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               },
               params.frameId,
             );
-            if (ensured && ensured.success)
-              start = project({ x: ensured.center.x, y: ensured.center.y })!;
+            if (ensured && ensured.success) start = { x: ensured.center.x, y: ensured.center.y };
           } catch {
             // ignore
           }
@@ -1182,8 +1169,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               action: TOOL_MESSAGE_TYPES.RESOLVE_REF,
               ref: params.ref,
             });
-            if (resolved && resolved.success)
-              end = project({ x: resolved.center.x, y: resolved.center.y })!;
+            if (resolved && resolved.success) end = { x: resolved.center.x, y: resolved.center.y };
           } catch {
             // ignore
           }
@@ -1199,8 +1185,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               },
               params.frameId,
             );
-            if (ensured && ensured.success)
-              end = project({ x: ensured.center.x, y: ensured.center.y })!;
+            if (ensured && ensured.success) end = { x: ensured.center.x, y: ensured.center.y };
           } catch {
             // ignore
           }
@@ -1279,7 +1264,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
       case 'scroll': {
         if (!params.coordinates && !params.ref)
           return createErrorResponse('Provide ref or coordinates for scroll');
-        let coord = params.coordinates ? project(params.coordinates)! : (undefined as any);
+        let coord = params.coordinates;
         if (params.ref) {
           try {
             await this.injectContentScript(
@@ -1294,7 +1279,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               ref: params.ref,
             });
             if (resolved && resolved.success)
-              coord = project({ x: resolved.center.x, y: resolved.center.y })!;
+              coord = { x: resolved.center.x, y: resolved.center.y };
           } catch {
             // ignore
           }
@@ -1596,9 +1581,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse('Invalid region: require x0>=0, y0>=0 and x1>x0, y1>y0');
         }
 
-        // Project coordinates from screenshot space to viewport space
-        const p0 = project({ x: x0, y: y0 })!;
-        const p1 = project({ x: x1, y: y1 })!;
+        const p0 = { x: x0, y: y0 };
+        const p1 = { x: x1, y: y1 };
         const rx0 = Math.min(p0.x, p1.x);
         const ry0 = Math.min(p0.y, p1.y);
         const rx1 = Math.max(p0.x, p1.x);
