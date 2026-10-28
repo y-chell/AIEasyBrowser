@@ -226,6 +226,8 @@ pnpm --filter aieasybrowser-bridge exec node dist/cli.js doctor
 
 重新构建扩展后，在扩展管理页点击“重新加载”以应用更新；重新注册 Native Host 后也需要重新加载扩展，使连接使用新的注册信息。
 
+诊断日志写入、轮转和 doctor 探测共用 `native-server.log.lock`。`log lock busy` 表示本次操作未获得锁，应等持有者完成后重试；不要删除仍由活进程持有的锁。异常退出留下的锁包含 PID 和创建时间，确认对应进程已退出后再移除；不会根据锁龄自动抢占。
+
 ## 边界与权限
 
 AIEasyBrowser 操作的是真实 Chrome profile 和已登录会话。桥接器只监听本机回环地址，只应向可信的本地 Agent 提供 CLI 访问，不提供远程监听配置。
@@ -244,10 +246,15 @@ AIEasyBrowser 操作的是真实 Chrome profile 和已登录会话。桥接器�
 pnpm run typecheck
 pnpm lint
 pnpm test
+pnpm test:cli-regression
 pnpm run build
 ```
 
-测试覆盖 CLI 参数、命名任务、动作/验证/扫描、输入能力契约、本机安全边界、取消与目标锁；旧协议入口返回 404。真实浏览器的复测步骤、结果和未验证范围维护在 `docs/KNOWN-ISSUES.md`，不把单元测试通过等同于所有网站和全部高级工具都已验收。
+`pnpm test:cli-regression` 会先构建 shared/native，再通过多个独立 CLI 进程连接当前运行的桥接器和 Chrome 扩展；它不会替你重启旧桥接器或重载扩展。运行前确认当前桥接器/扩展对应待测版本，且 `aieasybrowser health`、doctor 正常。
+
+脚本启动本机临时网页，创建两个随机 URL 的本机测试标签和一个带随机 query 的 GitHub HTTPS 测试副本；需要能访问 `https://github.com/`。只在新标签中填写测试值、刷新、运行脚本和插入随后移除的 CSP 探针，不改账号、原有标签或剪贴板。结束时关闭测试标签、忘记测试任务并退出临时服务；失败或清理失败都以非零状态报告，不把前置条件缺失写成跳过通过。成功 JSON 中 `commands` 包含清理阶段的 CLI 调用。
+
+单元测试覆盖 CLI 参数、命名任务、动作/验证/扫描、输入能力契约、本机安全边界、取消与目标锁；旧协议入口返回 404。真实浏览器脚本额外检查跨进程引用、同 URL 刷新、动作后置条件、超时/断开后的迟到失败与目标锁，以及真实 HTTPS 的 CSP。Windows 的 SIGINT 样本验证客户端终止和断开续查，不等于已验证 POSIX 的退出码 130 分支。结果和未验证范围维护在 `docs/KNOWN-ISSUES.md`，不把这些样本通过等同于所有网站和全部高级工具都已验收。
 
 ## 许可证
 

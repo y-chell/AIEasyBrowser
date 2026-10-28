@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AIEasyBrowser Regression @@TAG@@</title>
+  </head>
+  <body>
+    <main>
+      <h1>Regression @@TAG@@</h1>
+      <label for="entry">Entry @@TAG@@</label>
+      <input id="entry" type="text" autocomplete="off" />
+      <button id="add" type="button">Add @@TAG@@</button>
+      <p id="output">Waiting</p>
+      <p id="run-id">@@RUN_ID@@</p>
+      <p id="click-count">0</p>
+    </main>
+    <script>
+      window.__clickCount = 0;
+      window.__timeoutReady = false;
+      window.__lockReady = false;
+      window.__disconnectReady = false;
+      window.__unhandledRejections = 0;
+      window.addEventListener('unhandledrejection', () => {
+        window.__unhandledRejections += 1;
+      });
+      setTimeout(() => {
+        window.__timeoutReady = true;
+      }, 3500);
+      setTimeout(() => {
+        window.__lockReady = true;
+      }, 5500);
+      setTimeout(() => {
+        window.__disconnectReady = true;
+      }, 20000);
+      window.__lateFailure = async (mode) => {
+        await fetch('/signal?name=' + mode + '-start');
+        await new Promise((resolve) => setTimeout(resolve, 6500));
+        document.querySelector('#output').textContent = 'Late failure ' + mode;
+        await fetch('/signal?name=' + mode + '-end');
+        throw new Error('LATE_FAILURE_FIXTURE_' + mode);
+      };
+      document.querySelector('#add').addEventListener('click', () => {
+        window.__clickCount += 1;
+        document.querySelector('#click-count').textContent = String(window.__clickCount);
+        document.querySelector('#output').textContent =
+          'Added: ' + document.querySelector('#entry').value + ' @@TAG@@';
+      });
+    </script>
+  </body>
+</html>
