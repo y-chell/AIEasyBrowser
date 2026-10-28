@@ -33,6 +33,7 @@ export const TOOL_NAMES = {
     JAVASCRIPT: 'chrome_javascript',
     CDP_COMMAND: 'chrome_cdp_command',
     CDP_BATCH: 'chrome_cdp_batch',
+    CDP_SESSION: 'chrome_cdp_session',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -1549,6 +1550,11 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'number',
           description: 'Target window ID to pick active tab when tabId is omitted.',
         },
+        sessionId: {
+          type: 'string',
+          description:
+            'Child CDP session (OOPIF iframe or worker) from chrome_cdp_session status targets. Requires an active chrome_cdp_session on this tab started by the same task; unknown IDs fail before reaching Chrome.',
+        },
         bringToFront: {
           type: 'boolean',
           description: 'Send Page.bringToFront before the command (default false).',
@@ -1613,6 +1619,11 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'number',
           description: 'Target window ID to pick active tab when tabId is omitted.',
         },
+        sessionId: {
+          type: 'string',
+          description:
+            'Child CDP session (OOPIF iframe or worker) from chrome_cdp_session status targets. Requires an active chrome_cdp_session on this tab started by the same task; all commands go to this session; unknown IDs fail before reaching Chrome.',
+        },
         bringToFront: {
           type: 'boolean',
           description: 'Send Page.bringToFront before the batch (default false).',
@@ -1632,6 +1643,63 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         },
       },
       required: ['commands'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_SESSION,
+    description:
+      'Hold a Chrome DevTools Protocol session on a tab across calls and buffer its events. start attaches, records the listed event domains/methods (for example "Runtime", "Network.requestWillBeSent", or "*"), and by default auto-attaches OOPIF iframes and workers as child sessions. While held, CDP domain state enabled with chrome_cdp_command/batch (Runtime.enable, Network.enable, Debugger.enable) persists between calls, and child targets can be addressed with their sessionId. events reads buffered events after a cursor with byte limits; missed/dropped report ring-buffer loss. stop detaches. One session per tab, owned by the starting task. State is lost on extension reload. A detach while the tab stays open (user cancels the debugging banner, renderer crash) ends the session but keeps buffered events readable until stop; closing the tab discards the session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['start', 'status', 'events', 'stop'],
+          description: 'start | status | events | stop.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        events: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'start: domain ("Network") or exact method ("Debugger.paused") names to buffer, or "*" for all. Default none; child target attach/detach is tracked regardless.',
+        },
+        autoAttach: {
+          type: 'boolean',
+          description:
+            'start: auto-attach OOPIF iframes and workers as flattened child sessions (default true).',
+        },
+        maxEvents: {
+          type: 'number',
+          description:
+            'start: ring-buffer size (default 1000, max 10000). Oldest events are dropped.',
+        },
+        after: {
+          type: 'number',
+          description: 'events: return events with seq greater than this cursor (default 0).',
+        },
+        limit: {
+          type: 'number',
+          description: 'events: maximum events per page (default 100, max 1000).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'events: maximum page size in bytes (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'events: redact cookies/tokens/password-like data (default true). Set false only when raw values are required.',
+        },
+      },
+      required: ['action'],
     },
   },
   {

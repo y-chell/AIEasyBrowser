@@ -14,6 +14,8 @@ export interface BrowserToolExecutionContext {
   reportProgress?: (progress: NativeToolProgress) => void | Promise<void>;
   documentId?: string;
   strictTarget?: boolean;
+  /** Bridge task ID; owns long-lived state such as held debugger sessions. */
+  owner?: string;
 }
 
 const isolationQueues = new Map<string, Promise<void>>();
@@ -142,7 +144,7 @@ export async function runBrowserToolCallWithIsolation(
             throw new Error('STALE_DOCUMENT: the page navigated or refreshed; scan again');
           }
         }
-        const boundExecution =
+        const targetExecution =
           context?.transport === 'cli' || context?.documentId
             ? {
                 ...executionContext,
@@ -150,6 +152,9 @@ export async function runBrowserToolCallWithIsolation(
                 strictTarget: context.transport === 'cli',
               }
             : executionContext;
+        const boundExecution = sessionId
+          ? { ...targetExecution, owner: sessionId }
+          : targetExecution;
         const result = await execute(args, boundExecution);
         throwIfAborted(signal);
         return result;

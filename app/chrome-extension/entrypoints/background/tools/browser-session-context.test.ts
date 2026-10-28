@@ -45,7 +45,10 @@ describe('task cancellation and target ownership', () => {
     await runBrowserToolCallWithIsolation({ tabId: 8 }, context(), async () => result(99));
     const execute = vi.fn(async () => result());
     await runBrowserToolCallWithIsolation({}, context(), execute);
-    expect(execute).toHaveBeenCalledWith({}, { documentId: undefined, strictTarget: true });
+    expect(execute).toHaveBeenCalledWith(
+      {},
+      { documentId: undefined, strictTarget: true, owner: 'A' },
+    );
     expect(chrome.tabs.get).toHaveBeenCalledExactlyOnceWith(8);
     expect(chrome.tabs.query).not.toHaveBeenCalled();
   });
@@ -199,7 +202,7 @@ describe('document-bound execution', () => {
     expect(chrome.webNavigation.getFrame).toHaveBeenCalledWith({ tabId: 8, frameId: 5 });
     expect(execute).toHaveBeenCalledWith(
       { tabId: 8, frameId: 5, ref: 'ref_1' },
-      { documentId: 'doc-old', strictTarget: true },
+      { documentId: 'doc-old', strictTarget: true, owner: 'A' },
     );
   });
 

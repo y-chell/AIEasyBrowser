@@ -15,6 +15,7 @@
     "test:watch": "jest --watch",
     "test:cli-regression": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-regression.cjs",
     "test:cli-long-task": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-long-task.cjs",
+    "test:cli-cdp-session": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-cdp-session.cjs",
     "lint": "eslint 'src/**/*.{js,ts}'",
     "lint:fix": "eslint 'src/**/*.{js,ts}' --fix",
     "format": "prettier --write 'src/**/*.{js,ts,json}'",

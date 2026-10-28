@@ -35,6 +35,7 @@
     "test": "pnpm run build:shared && pnpm --filter aieasybrowser-bridge exec jest --runInBand && pnpm --filter aieasybrowser-extension test",
     "test:cli-regression": "pnpm --filter aieasybrowser-bridge run test:cli-regression",
     "test:cli-long-task": "pnpm --filter aieasybrowser-bridge run test:cli-long-task",
+    "test:cli-cdp-session": "pnpm --filter aieasybrowser-bridge run test:cli-cdp-session",
     "prepare": "husky"
   },
   "devDependencies": {

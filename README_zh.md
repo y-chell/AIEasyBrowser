@@ -206,7 +206,22 @@ aieasybrowser --session github session --forget
 
 `chrome_computer` 的坐标、拖动起点和区域始终为**当前顶层 viewport CSS 像素**，不受历史截图影响。旧实现会按截图上下文隐式缩放，这一行为已移除；依赖旧缩放的调用方需自行转换图像坐标。未缩放 viewport PNG 的物理像素约为 viewport × DPR；缩略图、裁剪图或整页图还要考虑各自尺寸、原点及当前滚动，不能一律除以 DPR。优先用当前 `getBoundingClientRect()`，布局变化后重新测量。iframe 内坐标需转换到顶层 viewport；跨域限制不等于无法扫描该 frame，也不使 ref 点击变成 trusted input。
 
-当前 Chrome 156 的跨站 iframe 样本中，trusted 坐标点击只到达 iframe 容器，子控件计数仍为 0；前台和后台均复现。此路径未修复，不保证跨域 trusted 输入可用；必须核对子 frame 状态，不能把输入 API 成功当作交互完成。
+Chrome 156 的跨站 iframe 样本中，trusted 坐标点击在 P4 两轮只到达 iframe 容器，2026-10-28 后续 3 轮送达子控件，代码未变，原因未定位。不保证跨域 trusted 输入可用；必须核对子 frame 状态，不能把输入 API 成功当作交互完成。
+
+### 持续 CDP 会话
+
+`chrome_cdp_command` / `chrome_cdp_batch` 每次调用都会 attach 再 detach，调用之间启用的域、断点和事件都不保留。跨多次调用的调试、事件观察和 iframe/worker 上下文使用 `chrome_cdp_session`：
+
+```powershell
+aieasybrowser --session re call chrome_cdp_session '{"action":"start","events":["Runtime.consoleAPICalled","Network"]}'
+aieasybrowser --session re call chrome_cdp_command '{"method":"Runtime.enable"}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"events","after":0}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"stop"}'
+```
+
+`start` 默认以 `flatten` 方式自动附着跨站 iframe 和 worker，`status.targets` 给出它们的 `sessionId`，传给 `chrome_cdp_command` / `chrome_cdp_batch` 即可在该上下文执行；未知或已分离的 sessionId 在发给 Chrome 前即拒绝。同站 iframe 不是独立 target。事件存放在扩展内存的环形缓冲（默认 1000 条，最多 10000 条，另有 8 MB 上限），用 `after` 游标分页；`missed` / `dropped` 非零表示有事件因溢出丢失。输出默认脱敏，`sanitizeOutput:false` 返回原值。
+
+会话归启动它的命名任务所有，其他任务访问返回 `CDP_SESSION_OWNED`。会话期间 Chrome 会持续显示调试提示条。用户取消提示条、DevTools 接管或页面崩溃会使会话结束（`active:false` 和 `ended.reason`），已缓冲事件在 `stop` 前仍可读；关闭标签直接丢弃会话。扩展重载或 Native Host 退出后状态丢失，需要重新 `start`。用完必须 `stop`，`session --forget` 不会释放 Chrome 中的调试会话。
 
 ## 本机连接配置
 
@@ -263,6 +278,7 @@ pnpm lint
 pnpm test
 pnpm test:cli-regression
 pnpm test:cli-long-task
+pnpm test:cli-cdp-session
 pnpm run build
 ```
 
@@ -281,6 +297,10 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 额外验收 detached/disabled/遮挡/重复目标、实际 PNG 尺寸与 DPR、滚动/布局更新、整页截图后坐标不变，以及跨域 iframe 的 synthetic/trusted 差异和不存在 frame 的错误。fixture 服务只绑定回环，iframe 使用同端口 localhost 与 127.0.0.1 构成跨源；不需要外网。只在本轮随机 URL 标签和唯一 storage key 上产生副作用，结束逐项清除 storage、关闭标签、忘记任务并退出服务；截图只在内存，不下载文件，不改用户账号、剪贴板或原有标签，也不启停原有 trace/抓包。失败和清理失败均非零退出；不支持的浏览器前置条件不记作通过。
 
 脚本 `ok=true` 表示固定工作流、严格防误操作断言及观测/清理完成，不表示全部能力可用。额外跨 frame 输入探针在未送达子控件时输出 `geometry.trustedFramePassed=false`、`frameInputStatus=container_only` 和显式 `limitations`；只有拿到容器事件及子控件计数证据才接受这类已知限制，不把未知失败、重复副作用或缺失证据当通过。跨域探针会短暂激活本轮测试标签，结束关闭；不对用户原有标签发送激活或导航命令。
+
+### 持续 CDP 会话验收
+
+`pnpm test:cli-cdp-session` 要求 Chrome 中已重载包含 `chrome_cdp_session` 的扩展。它在本机临时网页（含跨站 iframe）上用多个独立 CLI 进程验证：会话跨进程保持并缓冲另一进程触发的 console 事件；跨站 iframe 与新建的 dedicated worker 作为子会话可求值；未知 sessionId、其他任务访问和重复 start 被拒绝；`stop` 后该标签不再有调试附着；关闭标签后没有残留 debug target。脚本会打开一个本扩展的 `offscreen.html` 辅助标签读取 `chrome.debugger.getTargets()`，结束时与测试标签一起关闭，并忘记测试任务、退出临时服务。
 
 ## 许可证
 

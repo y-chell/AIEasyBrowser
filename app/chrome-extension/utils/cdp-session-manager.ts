@@ -122,8 +122,18 @@ class CDPSessionManager {
    * Send a CDP command. Requires that this manager has attached to the tab.
    * If not attached by us, will attempt a one-shot attach around the call.
    */
-  async sendCommand<T = any>(tabId: number, method: string, params?: object): Promise<T> {
+  async sendCommand<T = any>(
+    tabId: number,
+    method: string,
+    params?: object,
+    sessionId?: string,
+  ): Promise<T> {
     const state = this.getState(tabId);
+    if (sessionId !== undefined) {
+      // A child session only exists inside a held root attach; a temporary attach cannot reach it.
+      if (!state?.attachedByUs) throw new Error(`Tab ${tabId} has no held debugger session`);
+      return (await chrome.debugger.sendCommand({ tabId, sessionId }, method, params)) as T;
+    }
     if (state && state.attachedByUs) {
       return (await chrome.debugger.sendCommand({ tabId }, method, params)) as T;
     }

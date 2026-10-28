@@ -68,7 +68,7 @@ aieasybrowser --session task eval 'const r = document.querySelector("#target").g
 
 Re-measure after any layout shift. A toast, a cookie banner, or a fixed bottom card changes `y` for the whole page, and the numbers you measured a minute ago no longer point at the element.
 
-`chrome_computer` coordinate clicks dispatch `Input.dispatchMouseEvent`, which is trusted input; ref/selector single clicks remain synthetic. Prefer coordinates over DOM `.click()` for a top-frame control that checks `event.isTrusted`. A cross-origin frame can support scanned refs, but that does not prove trusted input reaches its child surface: the current Chrome 156 cross-site fixture receives the trusted click only at its iframe container. Verify the child state; do not claim success or replay the click based on the tool response.
+`chrome_computer` coordinate clicks dispatch `Input.dispatchMouseEvent`, which is trusted input; ref/selector single clicks remain synthetic. Prefer coordinates over DOM `.click()` for a top-frame control that checks `event.isTrusted`. A cross-origin frame can support scanned refs, but that does not prove trusted input reaches its child surface: on the Chrome 156 cross-site fixture the trusted click reached the child control in some runs and only the iframe container in others, cause not yet identified. Verify the child state; do not claim success or replay the click based on the tool response.
 
 A successful click response does not prove the intended effect. Wait or inspect the page first; do not automatically retry with `double_click` after a failed check or an unknown outcome. A new attempt requires evidence that the previous action did not run, or a known idempotent operation within the task's scope. Double-click is a distinct action, not a generic recovery step.
 
@@ -182,6 +182,24 @@ aieasybrowser --session research eval 'return document.title'
 ```
 
 `call` uses the tool's documented target rules. It supplies a selected `tabId` only when this session has one and the schema accepts it; system clipboard operations need no selected tab. Network capture has its own URL/active-tab rules. Closing tabs without explicit IDs or URL requires a selected session target, rather than closing the user's active page. Unknown top-level arguments are rejected. JS/click/fill can produce synthetic events; use the documented computer/CDP tools when a site requires trusted input.
+
+### Held CDP sessions
+
+`chrome_cdp_command`/`chrome_cdp_batch` attach and detach per call, so enabled domains, breakpoints, and events vanish between calls. For work that spans calls (watching console or network events, debugging, iframe/worker contexts), hold a session:
+
+```sh
+aieasybrowser --session re call chrome_cdp_session '{"action":"start","events":["Runtime.consoleAPICalled","Network"]}'
+aieasybrowser --session re call chrome_cdp_command '{"method":"Runtime.enable"}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"events","after":0}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"status"}'
+aieasybrowser --session re call chrome_cdp_command '{"method":"Runtime.evaluate","params":{"expression":"location.href","returnByValue":true},"sessionId":"<child sessionId from status.targets>"}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"stop"}'
+```
+
+- Page through events with `after` = the previous `nextAfter`. Nonzero `missed`/`dropped` means the ring buffer overflowed; do not treat the page as complete.
+- `status.targets` lists auto-attached cross-site iframes and workers; pass their `sessionId` to CDP commands. Same-site iframes are not separate targets.
+- A session belongs to the task that started it; other tasks get `CDP_SESSION_OWNED`. A second start returns `CDP_SESSION_ACTIVE`. Always `stop` when done: a held session keeps Chrome's debugging banner shown and domain state enabled.
+- `active:false` with `ended.reason` means Chrome detached it (banner cancelled, DevTools, crash); buffered events stay readable until `stop`. Extension reload loses the session; start again rather than assuming it survived.
 
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 

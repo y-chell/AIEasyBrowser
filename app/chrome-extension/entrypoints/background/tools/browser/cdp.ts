@@ -6,6 +6,8 @@ import {
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import { resolveChildSession } from '@/utils/cdp-event-hub';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   sanitizeAndLimitOutput,
@@ -21,6 +23,7 @@ interface CdpCommandParams {
   params?: Record<string, unknown>;
   tabId?: number;
   windowId?: number;
+  sessionId?: string;
   bringToFront?: boolean;
   timeoutMs?: number;
   maxOutputBytes?: number;
@@ -38,6 +41,7 @@ interface CdpBatchParams {
   commands?: CdpBatchItem[];
   tabId?: number;
   windowId?: number;
+  sessionId?: string;
   bringToFront?: boolean;
   timeoutMs?: number;
   maxOutputBytes?: number;
@@ -52,7 +56,7 @@ interface SerializedResult {
   originalBytes?: number;
 }
 
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+export function clampInt(value: unknown, fallback: number, min: number, max: number): number {
   const num = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(num)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(num)));
@@ -127,7 +131,7 @@ function maybeParseJson(text: string): { parsed: boolean; value?: unknown } {
   }
 }
 
-function serializeResult(
+export function serializeResult(
   value: unknown,
   options: { maxOutputBytes: number; sanitizeOutput: boolean },
 ): SerializedResult {
@@ -180,16 +184,30 @@ abstract class CdpBaseTool extends BaseBrowserToolExecutor {
     };
   }
 
+  /** Validates a child sessionId against the caller's held session before any CDP IO. */
+  protected resolveSessionId(
+    tabId: number,
+    sessionId: string | undefined,
+    executionContext?: BrowserToolExecutionContext,
+  ): string | undefined {
+    if (sessionId === undefined) return undefined;
+    if (!executionContext?.owner) {
+      throw new Error('CDP_SESSION_NOT_STARTED: sessionId requires a named task session');
+    }
+    return resolveChildSession(tabId, executionContext.owner, sessionId).sessionId;
+  }
+
   protected async sendCdpCommand(
     tabId: number,
     method: string,
     params: Record<string, unknown> | undefined,
     options: { timeoutMs: number; maxOutputBytes: number; sanitizeOutput: boolean },
+    sessionId?: string,
   ) {
     const startedAt = performance.now();
     try {
       const rawResult = await withTimeout(
-        cdpSessionManager.sendCommand(tabId, method, params || {}),
+        cdpSessionManager.sendCommand(tabId, method, params || {}, sessionId),
         options.timeoutMs,
       );
       return {
@@ -212,7 +230,10 @@ abstract class CdpBaseTool extends BaseBrowserToolExecutor {
 class CdpCommandTool extends CdpBaseTool {
   name = TOOL_NAMES.BROWSER.CDP_COMMAND;
 
-  async execute(args: CdpCommandParams): Promise<ToolResult> {
+  async execute(
+    args: CdpCommandParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
     const method = normalizeMethod(args?.method);
     if (!method) return createErrorResponse('method is required');
     if (!isPlainParams(args?.params)) return createErrorResponse('params must be an object');
@@ -222,18 +243,20 @@ class CdpCommandTool extends CdpBaseTool {
       if (!tab.id) return createErrorResponse('Active tab has no ID');
 
       const options = this.normalizeOptions(args || {});
+      const sessionId = this.resolveSessionId(tab.id, args?.sessionId, executionContext);
 
       const result = await cdpSessionManager.withSession(tab.id, 'cdp-command', async () => {
         if (args?.bringToFront === true) {
           await cdpSessionManager.sendCommand(tab.id!, 'Page.bringToFront', {});
         }
-        return await this.sendCdpCommand(tab.id!, method, args?.params, options);
+        return await this.sendCdpCommand(tab.id!, method, args?.params, options, sessionId);
       });
 
       return this.createJsonSuccess({
         tool: this.name,
         tabId: tab.id,
         windowId: tab.windowId,
+        ...(sessionId ? { sessionId } : {}),
         sanitizeOutput: options.sanitizeOutput,
         ...result,
       });
@@ -248,7 +271,10 @@ class CdpCommandTool extends CdpBaseTool {
 class CdpBatchTool extends CdpBaseTool {
   name = TOOL_NAMES.BROWSER.CDP_BATCH;
 
-  async execute(args: CdpBatchParams): Promise<ToolResult> {
+  async execute(
+    args: CdpBatchParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
     const commands = Array.isArray(args?.commands)
       ? args.commands.slice(0, MAX_BATCH_COMMANDS)
       : [];
@@ -272,6 +298,7 @@ class CdpBatchTool extends CdpBaseTool {
       if (!tab.id) return createErrorResponse('Active tab has no ID');
 
       const options = this.normalizeOptions(args || {});
+      const sessionId = this.resolveSessionId(tab.id, args?.sessionId, executionContext);
       const results: Array<Record<string, unknown>> = [];
       let stoppedAt: number | undefined;
 
@@ -283,7 +310,13 @@ class CdpBatchTool extends CdpBaseTool {
         for (let index = 0; index < commands.length; index += 1) {
           const command = commands[index];
           const method = normalizeMethod(command.method);
-          const result = await this.sendCdpCommand(tab.id!, method, command.params, options);
+          const result = await this.sendCdpCommand(
+            tab.id!,
+            method,
+            command.params,
+            options,
+            sessionId,
+          );
           results.push({
             index,
             label: typeof command.label === 'string' && command.label ? command.label : undefined,
@@ -303,6 +336,7 @@ class CdpBatchTool extends CdpBaseTool {
         tool: this.name,
         tabId: tab.id,
         windowId: tab.windowId,
+        ...(sessionId ? { sessionId } : {}),
         requestedCount: commands.length,
         executedCount: results.length,
         stoppedAt,
