@@ -130,6 +130,106 @@ describe('diagnostic log records', () => {
 });
 
 describe('log failure handling', () => {
+  test('rejects writes and probes while another owner holds the log lock', () => {
+    const target = getLogFilePath();
+    fs.writeFileSync(target, 'EVIDENCE');
+    fs.writeFileSync(target + '.lock', 'OTHER_OWNER');
+    expect(logger.info({ event: 'test.locked' })?.message).toContain('log lock busy');
+    expect(probeLogWritable()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('log lock busy'),
+    });
+    expect(fs.readFileSync(target, 'utf8')).toBe('EVIDENCE');
+    expect(fs.readFileSync(target + '.lock', 'utf8')).toBe('OTHER_OWNER');
+    fs.unlinkSync(target + '.lock');
+    expect(probeLogWritable().ok).toBe(true);
+    expect(logger.info({ event: 'test.unlocked' })).toBeUndefined();
+    expect(fs.readFileSync(target, 'utf8')).toContain('test.unlocked');
+    expect(fs.existsSync(target + '.lock')).toBe(false);
+  });
+
+  test('holds the same lock throughout probe rename and rotation', () => {
+    const target = getLogFilePath();
+    fs.writeFileSync(target, 'x'.repeat(MAX_LOG_BYTES));
+    const rename = fs.renameSync.bind(fs);
+    let probed = false;
+    let rotated = false;
+    jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      expect(fs.existsSync(target + '.lock')).toBe(true);
+      if (String(to).includes('.rename-probe-')) {
+        probed = true;
+        expect(logger.info({ event: 'test.contender' })?.message).toContain('log lock busy');
+      }
+      if (String(to).includes('.rotate-')) {
+        rotated = true;
+        expect(probeLogWritable().ok).toBe(false);
+      }
+      return rename(from, to);
+    });
+    expect(probeLogWritable().ok).toBe(true);
+    expect(logger.info({ event: 'test.rotation' })).toBeUndefined();
+    expect(probed).toBe(true);
+    expect(rotated).toBe(true);
+    expect(fs.existsSync(target + '.lock')).toBe(false);
+  });
+
+  test('reports lock initialization failure and releases its own lock', () => {
+    const write = fs.writeFileSync.bind(fs);
+    jest.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+      if (typeof file === 'number') throw new Error('lock metadata denied');
+      return write(file, data, options);
+    });
+    expect(logger.info({ event: 'test.lock' })?.message).toContain('lock metadata denied');
+    expect(fs.existsSync(getLogFilePath() + '.lock')).toBe(false);
+    expect(fs.existsSync(getLogFilePath())).toBe(false);
+  });
+
+  test('reports lock release failure together with the primary probe failure', () => {
+    fs.writeFileSync(getLogFilePath(), 'EVIDENCE');
+    jest.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('rename denied');
+    });
+    jest.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+      throw new Error('unlock denied');
+    });
+    const result = probeLogWritable();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('rename denied');
+    expect(result.error).toContain('unlock denied');
+    expect(fs.existsSync(getLogFilePath() + '.lock')).toBe(true);
+  });
+
+  test('reports lock close failure even when a record was appended', () => {
+    const close = fs.closeSync.bind(fs);
+    let lockDescriptor: number;
+    const open = fs.openSync.bind(fs);
+    jest.spyOn(fs, 'openSync').mockImplementation((file, flags, mode) => {
+      const descriptor = open(file, flags, mode);
+      if (String(file).endsWith('.lock')) lockDescriptor = descriptor;
+      return descriptor;
+    });
+    jest.spyOn(fs, 'closeSync').mockImplementation((descriptor) => {
+      close(descriptor);
+      if (descriptor === lockDescriptor) throw new Error('close denied');
+    });
+    expect(logger.info({ event: 'test.lock' })?.message).toContain('cannot close log lock');
+    expect(readRecords()).toHaveLength(1);
+  });
+
+  test('does not append after an active log stat permission failure', () => {
+    const target = getLogFilePath();
+    const stat = fs.statSync.bind(fs);
+    fs.writeFileSync(target, 'EVIDENCE');
+    jest.spyOn(fs, 'statSync').mockImplementation(((file: fs.PathLike) => {
+      if (String(file) === target)
+        throw Object.assign(new Error('stat denied'), { code: 'EACCES' });
+      return stat(file);
+    }) as typeof fs.statSync);
+    expect(logger.info({ event: 'test.stat' })?.message).toContain('cannot inspect active log');
+    expect(fs.readFileSync(target, 'utf8')).toBe('EVIDENCE');
+    expect(fs.existsSync(target + '.lock')).toBe(false);
+  });
+
   test('returns the error when the directory cannot be written', () => {
     // Occupy the log path with a directory so the append must fail.
     fs.rmSync(fixtureDir, { recursive: true, force: true });
@@ -224,6 +324,58 @@ describe('log failure handling', () => {
 
     expect(probe.ok).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe(originalContent);
+  });
+
+  test('reports where evidence remains if both probe restore operations fail', () => {
+    const target = getLogFilePath();
+    fs.writeFileSync(target, 'EVIDENCE');
+    const rename = fs.renameSync.bind(fs);
+    jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(from).includes('.rename-probe-')) throw new Error('restore denied');
+      return rename(from, to);
+    });
+    jest.spyOn(fs, 'copyFileSync').mockImplementation(() => {
+      throw new Error('copy denied');
+    });
+    const result = probeLogWritable();
+    const remaining = fs.readdirSync(fixtureDir).find((name) => name.includes('.rename-probe-'));
+    expect(remaining).toBeDefined();
+    expect(result).toMatchObject({ ok: false });
+    expect(result.error).toContain(path.join(fixtureDir, remaining!));
+    expect(result.error).toContain('copy denied');
+    expect(fs.readFileSync(path.join(fixtureDir, remaining!), 'utf8')).toBe('EVIDENCE');
+  });
+
+  test('reports cleanup failure together with the original probe failure', () => {
+    fs.writeFileSync(getLogFilePath(), 'EVIDENCE');
+    jest.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('rename denied');
+    });
+    const rm = fs.rmSync.bind(fs);
+    jest.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (String(target).includes('.write-probe-')) throw new Error('cleanup denied');
+      return rm(target, options);
+    });
+    const result = probeLogWritable();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('rename denied');
+    expect(result.error).toContain('cleanup denied');
+  });
+
+  test('reports a rotation backup cleanup failure without deleting its evidence', () => {
+    const target = getLogFilePath();
+    fs.writeFileSync(target, 'x'.repeat(MAX_LOG_BYTES));
+    fs.writeFileSync(target + '.5', 'OLDEST');
+    const rm = fs.rmSync.bind(fs);
+    jest.spyOn(fs, 'rmSync').mockImplementation((file, options) => {
+      if (String(file).includes('.bak-')) throw new Error('backup cleanup denied');
+      return rm(file, options);
+    });
+    const error = logger.info({ event: 'test.rotation' });
+    expect(error?.message).toContain('log rotation cleanup failed');
+    const backup = fs.readdirSync(fixtureDir).find((name) => name.includes('.bak-'));
+    expect(backup).toBeDefined();
+    expect(fs.readFileSync(path.join(fixtureDir, backup!), 'utf8')).toBe('OLDEST');
   });
 
   test('probeLogWritable fails when a real archive cannot be renamed', () => {

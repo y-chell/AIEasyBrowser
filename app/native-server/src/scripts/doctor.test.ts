@@ -179,24 +179,28 @@ describe('log check', () => {
     });
   });
 
-  test('surfaces an unwritable log target as an error with a next step', async () => {
-    const diag = jest.requireMock('../util/diag-log') as {
-      probeLogWritable: () => { ok: boolean; path: string; error?: string };
-    };
-    const original = diag.probeLogWritable;
-    diag.probeLogWritable = () => ({
-      ok: false,
-      path: '/fixture/aieasybrowser/logs/native-server.log',
-      error: 'EACCES: permission denied',
-    });
-    try {
-      const report = await collectDoctorReport({ browser: 'chrome' });
-      const logs = report.checks.find((check) => check.id === 'logs');
-      expect(logs?.status).toBe('error');
-      expect(String(logs?.message)).toContain('EACCES: permission denied');
-      expect(report.nextSteps.join(' ')).toContain('/fixture/aieasybrowser/logs');
-    } finally {
-      diag.probeLogWritable = original;
-    }
-  });
+  test.each(['EACCES: permission denied', 'log lock busy: native-server.log.lock'])(
+    'surfaces log failure %s with an actionable next step',
+    async (error) => {
+      const diag = jest.requireMock('../util/diag-log') as {
+        probeLogWritable: () => { ok: boolean; path: string; error?: string };
+      };
+      const original = diag.probeLogWritable;
+      diag.probeLogWritable = () => ({
+        ok: false,
+        path: '/fixture/aieasybrowser/logs/native-server.log',
+        error,
+      });
+      try {
+        const report = await collectDoctorReport({ browser: 'chrome' });
+        const logs = report.checks.find((check) => check.id === 'logs');
+        expect(logs?.status).toBe('error');
+        expect(String(logs?.message)).toContain(error);
+        expect(report.nextSteps.join(' ')).toContain('/fixture/aieasybrowser/logs');
+        expect(report.nextSteps.join(' ')).toContain('verify its recorded owner has exited');
+      } finally {
+        diag.probeLogWritable = original;
+      }
+    },
+  );
 });

@@ -90,6 +90,53 @@ function rotationSlot(filePath: string, index: number): string {
   return `${filePath}.${index}`;
 }
 
+/** All cooperating writers and doctor probes must hold this cross-process lock. */
+function withLogLock(filePath: string, action: () => Error | undefined): Error | undefined {
+  const lockPath = filePath + '.lock';
+  let descriptor: number | undefined;
+  let failure: Error | undefined;
+  const addFailure = (error: unknown, prefix = ''): void => {
+    const detail = prefix + (error instanceof Error ? error.message : String(error));
+    failure = new Error(failure ? failure.message + '; ' + detail : detail);
+  };
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    try {
+      descriptor = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        // Never steal by age: a paused writer may still own the live files.
+        throw new Error(
+          `log lock busy: ${lockPath}; retry after the owner finishes; if abandoned, verify the owner has exited before removing the lock`,
+        );
+      }
+      throw error;
+    }
+    fs.writeFileSync(
+      descriptor,
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }) + '\n',
+      'utf8',
+    );
+    failure = action();
+  } catch (error) {
+    addFailure(error);
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch (error) {
+        addFailure(error, `cannot close log lock ${lockPath}: `);
+      }
+      try {
+        fs.unlinkSync(lockPath);
+      } catch (error) {
+        addFailure(error, `cannot release log lock ${lockPath}: `);
+      }
+    }
+  }
+  return failure;
+}
+
 let renameProbeCounter = 0;
 
 function uniqueSiblingPath(filePath: string, purpose: string): string {
@@ -110,48 +157,6 @@ function uniqueSiblingPath(filePath: string, purpose: string): string {
 }
 
 /**
- * Move `from` onto `to` without destroying an existing destination when the move
- * fails. The destination is parked under a backup name first and restored on error,
- * so a rename denied halfway through rotation never deletes existing log evidence.
- */
-function moveWithBackup(from: string, to: string): Error | undefined {
-  const backup = `${to}.bak-${process.pid}-${renameProbeCounter++}`;
-  let parkedDestination = false;
-  try {
-    if (fs.existsSync(to)) {
-      fs.renameSync(to, backup);
-      parkedDestination = true;
-    }
-  } catch (error) {
-    return new Error(
-      `log rotation failed: cannot park ${to}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  try {
-    fs.renameSync(from, to);
-  } catch (error) {
-    if (parkedDestination) {
-      try {
-        fs.renameSync(backup, to);
-      } catch {
-        // The old destination stays under its backup name rather than being lost.
-      }
-    }
-    return new Error(
-      `log rotation failed: cannot move ${from}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  if (parkedDestination) {
-    try {
-      fs.rmSync(backup, { force: true });
-    } catch {
-      // A leftover backup is harmless and still contains the previous archive.
-    }
-  }
-  return undefined;
-}
-
-/**
  * Rotate before the next append. `thresholdBytes` is the size at which rotation is
  * required; the writer passes the remaining space so a record that would cross the
  * cap triggers rotation first. Returns an error instead of proceeding when rotation
@@ -161,8 +166,9 @@ function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error
   let size: number;
   try {
     size = fs.statSync(filePath).size;
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    return new Error(`cannot inspect active log ${filePath}: ${String(error)}`);
   }
   if (size < thresholdBytes) return undefined;
 
@@ -183,8 +189,11 @@ function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error
   const lastSlot = rotationSlot(filePath, MAX_LOG_FILES);
   const lastBackup = fs.existsSync(lastSlot) ? uniqueSiblingPath(lastSlot, 'bak') : undefined;
   if (lastBackup) {
-    const backupError = moveWithBackup(lastSlot, lastBackup);
-    if (backupError) return backupError;
+    try {
+      fs.renameSync(lastSlot, lastBackup);
+    } catch (error) {
+      return new Error(`log rotation failed: cannot preserve ${lastSlot}: ${String(error)}`);
+    }
   }
 
   const moves = [
@@ -261,8 +270,10 @@ function rotateIfNeeded(filePath: string, thresholdBytes = MAX_LOG_BYTES): Error
   if (lastBackup) {
     try {
       fs.rmSync(lastBackup, { force: true });
-    } catch {
-      // A leftover backup still preserves the previous oldest archive.
+    } catch (error) {
+      return new Error(
+        `log rotation cleanup failed; archive remains at ${lastBackup}: ${String(error)}`,
+      );
     }
   }
   return undefined;
@@ -290,8 +301,10 @@ function verifyPathRenameable(filePath: string): Error | undefined {
     try {
       fs.copyFileSync(probe, filePath, fs.constants.COPYFILE_EXCL);
       fs.rmSync(probe);
-    } catch {
-      // Keep the probe file if restoring the original path is also denied.
+    } catch (recoveryError) {
+      return new Error(
+        `cannot restore ${filePath} after rename probe: ${String(error)}; recovery failed: ${String(recoveryError)}; original retained at ${probe}`,
+      );
     }
     return new Error(
       `cannot restore ${filePath} after rename probe: ${error instanceof Error ? error.message : String(error)}`,
@@ -344,7 +357,6 @@ export function log(level: LogLevel, fields: LogFields): Error | undefined {
 
   const target = getLogFilePath();
   try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
     const line = `${JSON.stringify(record)}\n`;
     const lineBytes = Buffer.byteLength(line, 'utf8');
     if (lineBytes > MAX_LOG_BYTES) {
@@ -352,9 +364,13 @@ export function log(level: LogLevel, fields: LogFields): Error | undefined {
     }
     // Rotate when this record would not fit in the remaining space, not only when
     // the file is already at the cap.
-    const rotationError = rotateIfNeeded(target, MAX_LOG_BYTES - lineBytes);
-    if (rotationError) throw rotationError;
-    fs.appendFileSync(target, line, 'utf8');
+    const writeError = withLogLock(target, () => {
+      const rotationError = rotateIfNeeded(target, MAX_LOG_BYTES - lineBytes);
+      if (rotationError) return rotationError;
+      fs.appendFileSync(target, line, 'utf8');
+      return undefined;
+    });
+    if (writeError) throw writeError;
     return undefined;
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -383,66 +399,65 @@ export const logger = {
 export function probeLogWritable(): { ok: boolean; path: string; error?: string } {
   const target = getLogFilePath();
   const dir = path.dirname(target);
-  const writeProbe = path.join(dir, '.write-probe-' + process.pid + '-' + randomUUID());
-  let writeProbeCreated = false;
-  let cleanupError: Error | undefined;
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    if (fs.existsSync(target) && !fs.statSync(target).isFile()) {
-      throw new Error('log path exists but is not a regular file');
-    }
-    for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
-      const slot = rotationSlot(target, index);
-      if (fs.existsSync(slot) && !fs.statSync(slot).isFile()) {
-        throw new Error(`rotation slot is not a regular file: ${slot}`);
-      }
-    }
-
-    // The write probe checks the directory accepts new files and that a failure to
-    // clean it up is reported rather than thrown at the caller.
-    const descriptor = fs.openSync(writeProbe, 'wx');
-    writeProbeCreated = true;
+  const failure = withLogLock(target, () => {
+    const writeProbe = path.join(dir, '.write-probe-' + process.pid + '-' + randomUUID());
+    let writeProbeCreated = false;
+    let cleanupError: Error | undefined;
+    let probeError: string | undefined;
     try {
-      fs.writeFileSync(descriptor, 'probe\n', 'utf8');
-    } finally {
-      fs.closeSync(descriptor);
-    }
-
-    // Rotation renames the live file and every existing archive; verify each real
-    // path can be renamed, not just a throwaway file in the same directory.
-    const renameError =
-      verifyPathRenameable(target) ??
-      (() => {
-        for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
-          const error = verifyPathRenameable(rotationSlot(target, index));
-          if (error) return error;
+      if (fs.existsSync(target) && !fs.statSync(target).isFile()) {
+        throw new Error('log path exists but is not a regular file');
+      }
+      for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
+        const slot = rotationSlot(target, index);
+        if (fs.existsSync(slot) && !fs.statSync(slot).isFile()) {
+          throw new Error(`rotation slot is not a regular file: ${slot}`);
         }
-        return undefined;
-      })();
-    if (renameError) throw renameError;
-    fs.appendFileSync(target, '', 'utf8');
-    fs.accessSync(target, fs.constants.W_OK);
-  } catch (error) {
-    return {
-      ok: false,
-      path: target,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  } finally {
-    if (writeProbeCreated) {
+      }
+
+      // The write probe checks the directory accepts new files and that a failure to
+      // clean it up is reported rather than thrown at the caller.
+      const descriptor = fs.openSync(writeProbe, 'wx');
+      writeProbeCreated = true;
       try {
-        fs.rmSync(writeProbe, { force: true });
-      } catch (error) {
-        cleanupError = new Error(
-          `probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        fs.writeFileSync(descriptor, 'probe\n', 'utf8');
+      } finally {
+        fs.closeSync(descriptor);
+      }
+
+      // Rotation renames the live file and every existing archive; verify each real
+      // path can be renamed, not just a throwaway file in the same directory.
+      const renameError =
+        verifyPathRenameable(target) ??
+        (() => {
+          for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
+            const error = verifyPathRenameable(rotationSlot(target, index));
+            if (error) return error;
+          }
+          return undefined;
+        })();
+      if (renameError) throw renameError;
+      fs.appendFileSync(target, '', 'utf8');
+      fs.accessSync(target, fs.constants.W_OK);
+    } catch (error) {
+      probeError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (writeProbeCreated) {
+        try {
+          fs.rmSync(writeProbe, { force: true });
+        } catch (error) {
+          cleanupError = new Error(
+            `probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
     }
-  }
-  if (cleanupError) {
-    return { ok: false, path: target, error: cleanupError.message };
-  }
-  return { ok: true, path: target };
+    if (cleanupError) {
+      return new Error([probeError, cleanupError.message].filter(Boolean).join('; '));
+    }
+    return probeError ? new Error(probeError) : undefined;
+  });
+  return failure ? { ok: false, path: target, error: failure.message } : { ok: true, path: target };
 }
 
 /** Timestamped duration helper for command and tool timing. */

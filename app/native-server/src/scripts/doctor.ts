@@ -1037,7 +1037,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
     },
   });
   if (!logProbe.ok) {
-    nextSteps.push(`Make the log directory writable: ${path.dirname(logProbe.path)}`);
+    nextSteps.push(
+      `Resolve the reported log error at ${logProbe.path}; for an abandoned .lock, verify its recorded owner has exited before removing it`,
+    );
   }
 
   // Compute summary
