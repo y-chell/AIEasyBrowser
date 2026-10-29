@@ -5,10 +5,8 @@ import { consoleTool } from './console';
 import { consoleBuffer } from './console-buffer';
 import { screenshotTool } from './screenshot';
 import { networkCaptureStartTool } from './network-capture-web-request';
-import { networkDebuggerStartTool } from './network-capture-debugger';
 
 type DebugConsoleMode = 'auto' | 'buffer' | 'snapshot';
-type NetworkBackend = 'webRequest' | 'debugger';
 type NetworkSource = 'active' | 'completed';
 
 interface DebugEvidenceToolParams {
@@ -30,7 +28,7 @@ interface DebugEvidenceToolParams {
 }
 
 interface NetworkCaptureCandidate {
-  backend: NetworkBackend;
+  backend: 'webRequest';
   source: NetworkSource;
   active: boolean;
   tabId: number;
@@ -329,34 +327,6 @@ function sortRequestsByTime(requests: Array<Record<string, unknown>>) {
   });
 }
 
-function readActiveDebuggerCapture(tabId: number): Record<string, unknown> | undefined {
-  const captureData = (
-    networkDebuggerStartTool as unknown as { captureData?: Map<number, unknown> }
-  ).captureData;
-  if (!(captureData instanceof Map)) return undefined;
-  const value = captureData.get(tabId);
-  return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
-}
-
-function readCompletedDebuggerCapture(
-  tabId: number,
-): { completedAt?: number; reason?: string; data?: Record<string, unknown> } | undefined {
-  const completedCaptures = (
-    networkDebuggerStartTool as unknown as {
-      completedCaptures?: Map<number, { completedAt?: number; reason?: string; data?: unknown }>;
-    }
-  ).completedCaptures;
-  if (!(completedCaptures instanceof Map)) return undefined;
-  const value = completedCaptures.get(tabId);
-  if (!value || typeof value !== 'object') return undefined;
-  return {
-    completedAt: value.completedAt,
-    reason: value.reason,
-    data:
-      value.data && typeof value.data === 'object' ? (value.data as Record<string, unknown>) : {},
-  };
-}
-
 function readCompletedWebRequestCapture(
   tabId: number,
 ): { completedAt?: number; reason?: string; data?: Record<string, unknown> } | undefined {
@@ -377,17 +347,6 @@ function readCompletedWebRequestCapture(
 }
 
 function pickNetworkCandidate(tabId: number): NetworkCaptureCandidate | null {
-  const activeDebugger = readActiveDebuggerCapture(tabId);
-  if (activeDebugger) {
-    return {
-      backend: 'debugger',
-      source: 'active',
-      active: true,
-      tabId,
-      payload: activeDebugger,
-    };
-  }
-
   const activeWebRequest = networkCaptureStartTool.captureData.get(tabId);
   if (activeWebRequest && typeof activeWebRequest === 'object') {
     return {
@@ -399,54 +358,17 @@ function pickNetworkCandidate(tabId: number): NetworkCaptureCandidate | null {
     };
   }
 
-  const completedDebugger = readCompletedDebuggerCapture(tabId);
-  const completedWebRequest = readCompletedWebRequestCapture(tabId);
-
-  if (!completedDebugger && !completedWebRequest) return null;
-
-  if (!completedWebRequest) {
-    return {
-      backend: 'debugger',
-      source: 'completed',
-      active: false,
-      tabId,
-      completedAt: completedDebugger?.completedAt,
-      reason: completedDebugger?.reason,
-      payload: completedDebugger?.data || {},
-    };
-  }
-
-  if (!completedDebugger) {
-    return {
-      backend: 'webRequest',
-      source: 'completed',
-      active: false,
-      tabId,
-      completedAt: completedWebRequest?.completedAt,
-      reason: completedWebRequest?.reason,
-      payload: completedWebRequest?.data || {},
-    };
-  }
-
-  return (completedDebugger.completedAt || 0) >= (completedWebRequest.completedAt || 0)
-    ? {
-        backend: 'debugger',
-        source: 'completed',
-        active: false,
-        tabId,
-        completedAt: completedDebugger.completedAt,
-        reason: completedDebugger.reason,
-        payload: completedDebugger.data || {},
-      }
-    : {
-        backend: 'webRequest',
-        source: 'completed',
-        active: false,
-        tabId,
-        completedAt: completedWebRequest.completedAt,
-        reason: completedWebRequest.reason,
-        payload: completedWebRequest.data || {},
-      };
+  const completed = readCompletedWebRequestCapture(tabId);
+  if (!completed) return null;
+  return {
+    backend: 'webRequest',
+    source: 'completed',
+    active: false,
+    tabId,
+    completedAt: completed.completedAt,
+    reason: completed.reason,
+    payload: completed.data || {},
+  };
 }
 
 function buildNetworkSummary(tabId: number, limit: number) {

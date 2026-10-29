@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Network fixture @@RUN_ID@@</title>
+  </head>
+  <body>
+    <p>Held-session network table, bodies, interception, WebSocket and SSE</p>
+    <iframe id="cross" src="@@CROSS_ORIGIN@@/net-child" width="300" height="60"></iframe>
+    <script>
+      window.runId = '@@RUN_ID@@';
+      // Each call returns what the page saw, so a test can compare it with the recorded traffic.
+      window.netJson = async (value) => {
+        const response = await fetch('/net-api?kind=json', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer hidden-@@RUN_ID@@',
+            'X-Trace': 'trace-' + value,
+          },
+          body: JSON.stringify({ value }),
+        });
+        return [response.status, await response.text()];
+      };
+      window.netGet = async (kind) => {
+        try {
+          const response = await fetch('/net-api?kind=' + kind);
+          const buffer = await response.arrayBuffer();
+          return [
+            response.status,
+            buffer.byteLength,
+            new TextDecoder().decode(buffer.slice(0, 200)),
+          ];
+        } catch (error) {
+          return ['error', String(error)];
+        }
+      };
+      window.netSse = () =>
+        new Promise((resolve) => {
+          const seen = [];
+          const source = new EventSource('/net-sse');
+          source.addEventListener('tick', (event) => {
+            seen.push(event.data);
+            if (seen.length === 3) {
+              source.close();
+              resolve(seen);
+            }
+          });
+          source.onerror = () => {
+            source.close();
+            resolve(seen);
+          };
+        });
+      window.netWs = () =>
+        new Promise((resolve) => {
+          const socket = new WebSocket('ws://' + location.host + '/net-ws');
+          socket.onopen = () => socket.send('ping-@@RUN_ID@@');
+          socket.onmessage = (event) => {
+            socket.close(1000, 'done');
+            resolve(event.data);
+          };
+          socket.onerror = () => resolve('error');
+        });
+    </script>
+  </body>
+</html>

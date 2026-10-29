@@ -262,6 +262,18 @@ aieasybrowser --session re call chrome_cdp_inject '{"action":"list"}'
 
 `add` 用 `Page.addScriptToEvaluateOnNewDocument` 注册，可选 `worldName`（命名隔离 world）和 `runImmediately`（同时在当前文档执行，默认否）。`hook` 在页面 MAIN world 安装记录器：`function` 包装指定路径的函数，记录参数、返回值、`this` 摘要和调用栈；`property` 观察 get/set（`document.cookie` 这类访问器在定义处包装）；`fetch` / `xhr` 记录方法、URL、请求头名（不记值）、body 摘要、状态和耗时。路径还不存在时在 DOMContentLoaded 和 load 各重试一次，始终不存在的 frame 记为 `failed`。hook 默认也在当前文档执行。记录作为 `AEB.hook` 事件进入 `chrome_cdp_session events`，不受 start 的事件过滤影响，但同样受环形缓冲、字节上限和脱敏约束；每个文档超过 `maxRecords` 后停止并发一条 `limit`。记录来自页面上下文，页面能看到 binding 并伪造或屏蔽记录，只能当页面数据。`remove` 后新文档不再注入，已在当前文档运行的 hook 保留到导航，之后的记录被丢弃；`stop` 移除全部注册。跨站 iframe 重建时先暂停在启动前，注册完再恢复。worker 和跨站 iframe 内再嵌套的跨站 iframe 不覆盖。原 `chrome_inject_script` / `chrome_userscript` 执行器已删除。
 
+`chrome_cdp_network` 在同一会话里维护请求表，覆盖顶层、自动附着的跨站 iframe 和 worker，不受 start 事件过滤影响：
+
+```bash
+aieasybrowser --session re call chrome_cdp_network '{"action":"start"}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"list","types":["XHR","Fetch"]}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"get","seq":12}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"body","seq":12}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"har","url":"/api/"}'
+```
+
+请求按 `seq` 引用。`get` 返回渲染器请求头和线上请求头（含 Cookie、Set-Cookie），`auth` 只列凭据头名和 cookie 名；同时返回 body 摘要、发起者调用栈和分段耗时。重定向的每一跳是单独一行，用 `redirectedFrom` / `redirectedTo` 关联。Chrome 在导航后会丢弃响应体，所以请求结束时就读取：`bodies:"api"`（默认）保留 Document/XHR/Fetch/Other，`"all"` 全部保留，`"none"` 不保留。单个 body 最多保留 `maxBodyBytes`（默认 1 MB），所有 body 共用 32 MB，超出时淘汰最旧的。未保留的 body 在 Chrome 还有时按需读取。`body` 对文本按字符分页，对二进制按字节返回 base64，`part:"request"` 取请求体。`messages` 分页读取 WebSocket 帧和 EventSource 事件。`har` 把 HAR 1.2 写入下载目录，只返回 `path`。凭据头、cookie、query 的值和内嵌 token 默认脱敏，`sanitizeOutput:false` 关闭。`stop` 关闭 Network 并保留表，`clear` 清空表。跨站 iframe 重建时先暂停，Network 启用后再恢复。`chrome_network_capture` 的 debugger 后端（`needResponseBody`）已删除，只保留不带 body 的 webRequest 抓包。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -352,6 +364,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-contexts` 要求已重载包含 `chrome_cdp_session workers` 的扩展。临时网页带 `script-src 'self' 'unsafe-inline'` CSP（页面自身 `eval` 被拒），含同站 iframe、两个同 URL 的同站 iframe、跨站 iframe 及其内部嵌套 iframe，并创建 dedicated worker、shared worker 和 service worker。脚本验证：同站 frame 的 MAIN 求值（`eval --frame` 与 `chrome_javascript`）和 `wait --frame`；两个同 URL frame 各自命中自己的文档；ISOLATED 全局在调用间保留且 MAIN 看不到；未 start 时跨站 frame 返回 `CDP_SESSION_NOT_STARTED` 且不在其他 frame 执行；start 后跨站 frame 与其嵌套 frame 的 MAIN/ISOLATED 求值，其他任务返回 `CDP_SESSION_OWNED`；`workers` 列出三类 worker 且各自可求值，shared worker 调用后不留附着；未知 frame/worker/session 和非法参数被拒；`stop` 后无调试附着、跨站 frame 再次被拒。结束注销 service worker、关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 `pnpm test:cli-cdp-inject` 要求已重载包含 `chrome_cdp_inject` 的扩展。临时网页含同站 iframe、跨站 iframe 及其嵌套 iframe，签名对象在 DOMContentLoaded 中才创建。脚本验证：未 start 时被拒；注册主世界与命名 world 脚本、函数/属性/fetch/XHR hook 后重载，顶层第一个页面脚本前已执行，命名 world 全局与主世界隔离，各 frame（含重建后的跨站 iframe 新子会话）都执行并产生记录；函数 hook 在 DOMContentLoaded 后安装，调用记录含参数、返回值和调用栈，fetch/XHR 记录头名不含头值；`maxRecords` 生效；remove 后记录被丢弃、重载后不再安装；其他任务、非法路径、未知 id 和未知 hook 类型被拒；`stop` 后无调试附着，下次加载不再注入，跨站 iframe 正常加载。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-cdp-network` 要求已重载包含 `chrome_cdp_network` 的扩展。临时网页含跨站 iframe，并提供 JSON、二进制、2.1 MB 中文文本、SSE 和 WebSocket 回显接口。脚本验证以下内容：未 start 时被拒；JSON 请求的线上头默认脱敏，`auth` 只给名字，`sanitizeOutput:false` 时给原值；请求体和响应体与页面看到的一致；二进制按字节取 base64；大文本按整字截到 1 MB 并分页；跨站 iframe 的请求带子会话 sessionId；SSE 和 WebSocket 消息逐条记录；事件缓冲里没有 Network 事件；重载后旧 body 仍可读，重建的跨站 iframe 在新子会话里继续记录。HAR 默认不含凭据，raw 模式保留凭据，文件大小与返回值一致。脚本还验证：其他任务、未知 seq、非流请求读消息、重复 start、非法文件名、未知 action 和 `needResponseBody` 被拒；`stop` 后不再记录；会话 `stop` 后无调试附着；webRequest 抓包仍能抓到请求。结束删除 HAR 文件、关闭标签、忘记任务并退出临时服务。
 
 ## 许可证
 

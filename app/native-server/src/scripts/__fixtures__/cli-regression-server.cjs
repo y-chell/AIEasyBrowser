@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -15,6 +16,8 @@ const framesTemplate = fs.readFileSync(path.join(__dirname, 'cli-frames.html'), 
 const framesChild = fs.readFileSync(path.join(__dirname, 'cli-frames-child.html'), 'utf8');
 const framesWorker = fs.readFileSync(path.join(__dirname, 'cli-frames-worker.js'), 'utf8');
 const injectTemplate = fs.readFileSync(path.join(__dirname, 'cli-inject.html'), 'utf8');
+const networkTemplate = fs.readFileSync(path.join(__dirname, 'cli-network.html'), 'utf8');
+const networkChild = fs.readFileSync(path.join(__dirname, 'cli-network-child.html'), 'utf8');
 
 // One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
 function scriptsBundle() {
@@ -79,6 +82,80 @@ const server = http.createServer((request, response) => {
       'Cache-Control': 'no-store',
     });
     response.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/net') {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(
+      networkTemplate
+        .replaceAll('@@RUN_ID@@', runId)
+        .replaceAll('@@CROSS_ORIGIN@@', 'http://localhost:' + server.address().port),
+    );
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/net-child') {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(networkChild);
+    return;
+  }
+  if (url.pathname === '/net-api' && ['GET', 'POST'].includes(request.method)) {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      const kind = url.searchParams.get('kind') || '';
+      const headers = { 'Cache-Control': 'no-store', 'X-Run': runId };
+      if (kind === 'binary') {
+        const bytes = Buffer.alloc(1024);
+        for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 256;
+        response.writeHead(200, { ...headers, 'Content-Type': 'application/octet-stream' });
+        response.end(bytes);
+        return;
+      }
+      if (kind === 'big') {
+        // Larger than a default 1 MB body limit, in multi-byte text.
+        response.writeHead(200, { ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('汉'.repeat(700_000));
+        return;
+      }
+      response.writeHead(request.method === 'POST' ? 201 : 200, {
+        ...headers,
+        'Content-Type': 'application/json',
+        'Set-Cookie': 'net_session=hidden-' + runId + '; Path=/; HttpOnly',
+      });
+      response.end(
+        JSON.stringify({
+          kind,
+          method: request.method,
+          body: Buffer.concat(chunks).toString('utf8'),
+          trace: request.headers['x-trace'] || null,
+          run: runId,
+        }),
+      );
+    });
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/net-sse') {
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+    });
+    let count = 0;
+    const timer = setInterval(() => {
+      count += 1;
+      response.write('event: tick\nid: ' + count + '\ndata: tick-' + count + '-' + runId + '\n\n');
+      if (count === 3) {
+        clearInterval(timer);
+        response.end();
+      }
+    }, 50);
+    request.on('close', () => clearInterval(timer));
     return;
   }
   if (request.method === 'GET' && url.pathname === '/inject') {
@@ -153,6 +230,63 @@ const server = http.createServer((request, response) => {
   );
 });
 
+// Minimal RFC 6455 echo for /net-ws: unfragmented frames under 64 KB, enough for the fixture.
+const sockets = new Set();
+function wsFrame(opcode, payload) {
+  const length = payload.length;
+  const head =
+    length < 126
+      ? Buffer.from([0x80 | opcode, length])
+      : Buffer.from([0x80 | opcode, 126, length >> 8, length & 0xff]);
+  return Buffer.concat([head, payload]);
+}
+server.on('upgrade', (request, socket) => {
+  const url = new URL(request.url || '/', 'http://127.0.0.1');
+  const key = request.headers['sec-websocket-key'];
+  if (url.pathname !== '/net-ws' || typeof key !== 'string') {
+    socket.destroy();
+    return;
+  }
+  sockets.add(socket);
+  socket.on('close', () => sockets.delete(socket));
+  socket.on('error', () => socket.destroy());
+  const accept = crypto
+    .createHash('sha1')
+    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64');
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+      'Sec-WebSocket-Accept: ' +
+      accept +
+      '\r\n\r\n',
+  );
+  let pending = Buffer.alloc(0);
+  socket.on('data', (chunk) => {
+    pending = Buffer.concat([pending, chunk]);
+    while (pending.length >= 2) {
+      const opcode = pending[0] & 0x0f;
+      let length = pending[1] & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (pending.length < 4) return;
+        length = pending.readUInt16BE(2);
+        offset = 4;
+      }
+      if (pending.length < offset + 4 + length) return;
+      const mask = pending.subarray(offset, offset + 4);
+      const payload = Buffer.from(pending.subarray(offset + 4, offset + 4 + length));
+      for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+      pending = pending.subarray(offset + 4 + length);
+      if (opcode === 0x8) {
+        socket.end(wsFrame(0x8, payload.subarray(0, 2)));
+        return;
+      }
+      if (opcode === 0x1)
+        socket.write(wsFrame(0x1, Buffer.from('echo:' + payload.toString('utf8'))));
+    }
+  });
+});
+
 server.listen(0, '127.0.0.1', () => {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('fixture server failed to bind');
@@ -160,6 +294,7 @@ server.listen(0, '127.0.0.1', () => {
 });
 
 function close() {
+  for (const socket of sockets) socket.destroy();
   server.closeAllConnections();
   server.close(() => {
     if (process.connected) process.disconnect();

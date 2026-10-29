@@ -2,14 +2,10 @@ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { networkCaptureStartTool, networkCaptureStopTool } from './network-capture-web-request';
-import { networkDebuggerStartTool, networkDebuggerStopTool } from './network-capture-debugger';
 import type { BrowserToolExecutionContext } from '../browser-session-context';
-
-type NetworkCaptureBackend = 'webRequest' | 'debugger';
 
 interface NetworkCaptureToolParams {
   action: 'start' | 'stop';
-  needResponseBody?: boolean;
   url?: string;
   maxCaptureTime?: number;
   inactivityTimeout?: number;
@@ -112,48 +108,8 @@ function decorateJsonResult(result: ToolResult, extra: Record<string, unknown>):
   return result;
 }
 
-/**
- * Check if debugger-based capture is active
- */
-function isDebuggerCaptureActive(): boolean {
-  const captureData = (
-    networkDebuggerStartTool as unknown as { captureData?: Map<number, unknown> }
-  ).captureData;
-  return captureData instanceof Map && captureData.size > 0;
-}
-
-/**
- * Check if webRequest-based capture is active
- */
-function isWebRequestCaptureActive(): boolean {
-  return networkCaptureStartTool.captureData.size > 0;
-}
-
-function getDebuggerCaptureMap(): Map<number, any> {
-  const captureData = (
-    networkDebuggerStartTool as unknown as { captureData?: Map<number, unknown> }
-  ).captureData;
-  return captureData instanceof Map ? captureData : new Map();
-}
-
-function getDebuggerCaptureInfo(tabId: number): any | undefined {
-  return getDebuggerCaptureMap().get(tabId);
-}
-
 function getWebRequestCaptureInfo(tabId: number): any | undefined {
   return networkCaptureStartTool.captureData.get(tabId);
-}
-
-function getLatestCompletedDebuggerCapture(): { completedAt: number } | undefined {
-  return (
-    networkDebuggerStartTool as unknown as {
-      peekLatestCompletedCapture?: () => { completedAt: number } | undefined;
-    }
-  ).peekLatestCompletedCapture?.();
-}
-
-function getLatestCompletedWebRequestCapture(): { completedAt: number } | undefined {
-  return networkCaptureStartTool.peekLatestCompletedCapture?.();
 }
 
 function listCapturedRequests(captureInfo: any): any[] {
@@ -209,10 +165,7 @@ export async function waitForCapturedRequest(opts: WaitForCapturedRequestOptions
   const startTime = Date.now();
   const timeoutMs = Math.max(1000, Math.min(Number(opts.timeoutMs || 10000), 120000));
   const pollIntervalMs = 100;
-  const activeDebugger = getDebuggerCaptureInfo(opts.tabId);
-  const activeWebRequest = getWebRequestCaptureInfo(opts.tabId);
-  const useActiveDebugger = !!activeDebugger;
-  const useActiveWebRequest = !!activeWebRequest;
+  const useActiveWebRequest = !!getWebRequestCaptureInfo(opts.tabId);
   let tempCaptureStarted = false;
   let lastProgress = -1;
   let lastReportedAt = Number.NEGATIVE_INFINITY;
@@ -233,7 +186,7 @@ export async function waitForCapturedRequest(opts: WaitForCapturedRequestOptions
     throwIfAborted(opts.signal);
     await reportElapsedProgress(true);
 
-    if (!useActiveDebugger && !useActiveWebRequest) {
+    if (!useActiveWebRequest) {
       await networkCaptureStartTool.startCaptureForTab(opts.tabId, {
         maxCaptureTime: timeoutMs + 1000,
         inactivityTimeout: timeoutMs + 1000,
@@ -245,19 +198,14 @@ export async function waitForCapturedRequest(opts: WaitForCapturedRequestOptions
 
     while (Date.now() - startTime <= timeoutMs) {
       throwIfAborted(opts.signal);
-      const backend = getDebuggerCaptureInfo(opts.tabId) ? 'debugger' : 'webRequest';
-      const captureInfo =
-        backend === 'debugger'
-          ? getDebuggerCaptureInfo(opts.tabId)
-          : getWebRequestCaptureInfo(opts.tabId);
-      const matched = listCapturedRequests(captureInfo)
+      const matched = listCapturedRequests(getWebRequestCaptureInfo(opts.tabId))
         .filter((request) => matchesCapturedRequest(request, opts))
         .find((request) => isCompletedRequest(request));
 
       if (matched) {
         await reportWaitProgress(opts.reportProgress, 100, 'Matched network request');
         return {
-          backend,
+          backend: 'webRequest',
           request: matched,
           tookMs: Date.now() - startTime,
         };
@@ -276,12 +224,8 @@ export async function waitForCapturedRequest(opts: WaitForCapturedRequestOptions
 }
 
 /**
- * Unified Network Capture Tool
- *
- * Provides a single entry point for network capture, automatically selecting
- * the appropriate backend based on the `needResponseBody` parameter:
- * - needResponseBody=false (default): uses webRequest API (lightweight, no debugger conflict)
- * - needResponseBody=true: uses Debugger API (captures response body, may conflict with DevTools)
+ * Network capture through the webRequest API: no debugger, no bodies. Bodies, wire headers, and
+ * HAR come from chrome_cdp_network on a held debugger session.
  */
 class NetworkCaptureTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.NETWORK_CAPTURE;
@@ -292,93 +236,29 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       return createErrorResponse('Parameter [action] is required and must be one of: start, stop');
     }
 
-    const wantBody = args?.needResponseBody === true;
-    const debuggerActive = isDebuggerCaptureActive();
-    const webActive = isWebRequestCaptureActive();
-
     if (action === 'start') {
-      return this.handleStart(args, wantBody, debuggerActive, webActive);
-    }
-
-    return this.handleStop(args, debuggerActive, webActive);
-  }
-
-  private async handleStart(
-    args: NetworkCaptureToolParams,
-    wantBody: boolean,
-    debuggerActive: boolean,
-    webActive: boolean,
-  ): Promise<ToolResult> {
-    // Prevent any capture conflict (cross-mode or same-mode)
-    if (debuggerActive || webActive) {
-      const activeMode = debuggerActive ? 'debugger' : 'webRequest';
-      return createErrorResponse(
-        `Network capture is already active in ${activeMode} mode. Stop it before starting a new capture.`,
-      );
-    }
-
-    const delegate = wantBody ? networkDebuggerStartTool : networkCaptureStartTool;
-    const backend: NetworkCaptureBackend = wantBody ? 'debugger' : 'webRequest';
-
-    const result = await delegate.execute({
-      url: args.url,
-      maxCaptureTime: args.maxCaptureTime,
-      inactivityTimeout: args.inactivityTimeout,
-      includeStatic: args.includeStatic,
-    });
-
-    return decorateJsonResult(result, { backend, needResponseBody: wantBody });
-  }
-
-  private async handleStop(
-    args: NetworkCaptureToolParams,
-    debuggerActive: boolean,
-    webActive: boolean,
-  ): Promise<ToolResult> {
-    // Determine which backend to stop
-    let backendToStop: NetworkCaptureBackend | null = null;
-
-    // If user explicitly specified needResponseBody, try to stop that specific backend
-    if (args?.needResponseBody === true) {
-      backendToStop = debuggerActive ? 'debugger' : null;
-    } else if (args?.needResponseBody === false) {
-      backendToStop = webActive ? 'webRequest' : null;
-    }
-
-    // If no explicit preference or the specified backend isn't active, auto-detect
-    if (!backendToStop) {
-      if (debuggerActive) {
-        backendToStop = 'debugger';
-      } else if (webActive) {
-        backendToStop = 'webRequest';
-      } else if (args?.needResponseBody === true && getLatestCompletedDebuggerCapture()) {
-        backendToStop = 'debugger';
-      } else if (args?.needResponseBody === false && getLatestCompletedWebRequestCapture()) {
-        backendToStop = 'webRequest';
-      } else {
-        const latestDebugger = getLatestCompletedDebuggerCapture();
-        const latestWebRequest = getLatestCompletedWebRequestCapture();
-        if (latestDebugger || latestWebRequest) {
-          backendToStop =
-            (latestDebugger?.completedAt || 0) >= (latestWebRequest?.completedAt || 0)
-              ? 'debugger'
-              : 'webRequest';
-        }
+      if (networkCaptureStartTool.captureData.size > 0) {
+        return createErrorResponse(
+          'Network capture is already active. Stop it before starting a new capture.',
+        );
       }
+      const result = await networkCaptureStartTool.execute({
+        url: args.url,
+        maxCaptureTime: args.maxCaptureTime,
+        inactivityTimeout: args.inactivityTimeout,
+        includeStatic: args.includeStatic,
+      });
+      return decorateJsonResult(result, { backend: 'webRequest' });
     }
 
-    if (!backendToStop) {
+    if (
+      networkCaptureStartTool.captureData.size === 0 &&
+      !networkCaptureStartTool.peekLatestCompletedCapture?.()
+    ) {
       return createErrorResponse('No active network captures found in any tab.');
     }
-
-    const delegateStop =
-      backendToStop === 'debugger' ? networkDebuggerStopTool : networkCaptureStopTool;
-    const result = await delegateStop.execute();
-
-    return decorateJsonResult(result, {
-      backend: backendToStop,
-      needResponseBody: backendToStop === 'debugger',
-    });
+    const result = await networkCaptureStopTool.execute();
+    return decorateJsonResult(result, { backend: 'webRequest' });
   }
 }
 

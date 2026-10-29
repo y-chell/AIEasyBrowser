@@ -55,6 +55,8 @@ function describeSession(session: HeldSession) {
       reason: pause.reason,
       seq: pause.seq,
     })),
+    ...(session.network.enabled ? { network: { requests: session.network.records.size } } : {}),
+    ...(session.childStart.errors.length ? { childStartErrors: session.childStart.errors } : {}),
   };
 }
 

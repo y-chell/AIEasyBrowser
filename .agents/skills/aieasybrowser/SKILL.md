@@ -258,6 +258,22 @@ aieasybrowser --session re call chrome_cdp_inject '{"action":"list"}'
 - Hooks run in the page main world, so the page can see and forge them. Treat records as page data. `add` defaults to later documents only; hooks also run in the current documents unless `runImmediately:false`.
 - `remove` stops later records. A hook already running in a loaded document stays until it navigates. `stop` removes everything. Workers and frames nested inside a cross-site iframe are not covered.
 
+`chrome_cdp_network` keeps a request table in the same held session, for the tab, its cross-site iframes, and workers. It records whatever the start event filter is:
+
+```bash
+aieasybrowser --session re call chrome_cdp_network '{"action":"start"}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"list","types":["XHR","Fetch"]}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"get","seq":12}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"body","seq":12}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"messages","seq":15}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"har","url":"/api/"}'
+```
+
+- Rows are addressed by `seq`. `get` shows the renderer and wire headers (Cookie, Set-Cookie), `auth` (credential header and cookie names only), body previews, the initiator stack, and timings. Redirects are separate rows linked by `redirectedFrom`/`redirectedTo`.
+- Bodies are read when a request finishes, because Chrome drops them after navigation. `bodies:"api"` (default) keeps Document/XHR/Fetch/Other, `"all"` keeps everything, `"none"` keeps nothing. Each body keeps up to `maxBodyBytes` (1 MB by default), and all bodies share 32 MB. `body` pages text by chars, or binary as base64 by bytes. `part:"request"` returns the request body.
+- `messages` pages WebSocket frames and EventSource events. `har` writes HAR 1.2 to the Downloads folder and returns only `path`. Credential values are redacted unless `sanitizeOutput:false`.
+- `stop` disables Network and keeps the table readable. `clear` empties the table. Session `stop` ends everything. `chrome_network_capture` is webRequest-only, with no bodies.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.

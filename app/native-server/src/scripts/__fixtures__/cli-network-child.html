@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Network child</title>
+  </head>
+  <body style="margin: 0">
+    <p id="state">child</p>
+    <script>
+      // Cross-site frame traffic: it belongs to the OOPIF child session, not the root.
+      window.childFetch = async () => {
+        const response = await fetch('/net-api?kind=child');
+        return [response.status, await response.text()];
+      };
+    </script>
+  </body>
+</html>

@@ -1,5 +1,11 @@
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { hookSource, type HookKind, type HookSpec } from '@/utils/cdp-hook-runtime';
+import {
+  holdChildStart,
+  once,
+  releaseChildStart,
+  type ChildStartHost,
+} from '@/utils/cdp-child-start';
 
 /**
  * Document-start scripts and hooks of one held session (chrome_cdp_inject).
@@ -8,8 +14,8 @@ import { hookSource, type HookKind, type HookSpec } from '@/utils/cdp-hook-runti
  * on later navigations while Page is enabled; a Runtime binding exists in new documents only while
  * Runtime is enabled; registrations belong to one CDP session, so an OOPIF that is re-created on
  * navigation comes back as a new child session without them, and detach removes them all. New
- * children are therefore auto-attached paused (waitForDebuggerOnStart) while any script exists,
- * registered, then resumed.
+ * children are therefore held paused on start (cdp-child-start) while any script exists and
+ * registered before the session hub resumes them.
  */
 
 export const MAX_INJECTIONS = 50;
@@ -38,15 +44,12 @@ export interface InjectState {
   /** Per host key: Page.enable / Runtime.enable + addBinding, shared by concurrent callers. */
   pageReady: Map<string, Promise<void>>;
   bindingReady: Map<string, Promise<void>>;
-  waitOnStart: boolean;
   /** Binding calls that were not a record of a current hook (removed hook, malformed payload). */
   rejected: number;
   errors: string[];
 }
 
-export interface InjectSessionHost {
-  tabId: number;
-  autoAttach: boolean;
+export interface InjectSessionHost extends ChildStartHost {
   targets: Map<string, { sessionId: string; type: string }>;
   inject: InjectState;
 }
@@ -59,7 +62,6 @@ export function createInjectState(): InjectState {
     nextId: 1,
     pageReady: new Map(),
     bindingReady: new Map(),
-    waitOnStart: false,
     rejected: 0,
     errors: [],
   };
@@ -70,7 +72,6 @@ export function clearInjectState(state: InjectState) {
   state.scripts.clear();
   state.pageReady.clear();
   state.bindingReady.clear();
-  state.waitOnStart = false;
 }
 
 function noteError(state: InjectState, message: string) {
@@ -80,17 +81,6 @@ function noteError(state: InjectState, message: string) {
 
 function send(host: InjectSessionHost, key: string, method: string, params: object = {}) {
   return cdpSessionManager.sendCommand(host.tabId, method, params, key || undefined);
-}
-
-function once(map: Map<string, Promise<void>>, key: string, run: () => Promise<void>) {
-  let ready = map.get(key);
-  if (!ready) {
-    ready = run();
-    map.set(key, ready);
-    // A failed enable is retried by the next caller instead of being cached.
-    ready.catch(() => map.delete(key));
-  }
-  return ready;
 }
 
 async function prepare(host: InjectSessionHost, key: string, binding: boolean) {
@@ -128,40 +118,17 @@ async function registerOn(host: InjectSessionHost, key: string, script: Injectio
   }
 }
 
-async function setWaitOnStart(host: InjectSessionHost, wait: boolean) {
-  const state = host.inject;
-  if (!host.autoAttach || state.waitOnStart === wait) return;
-  await send(host, '', 'Target.setAutoAttach', {
-    autoAttach: true,
-    waitForDebuggerOnStart: wait,
-    flatten: true,
-  });
-  state.waitOnStart = wait;
-}
-
-/** A new OOPIF gets every script before its document runs; any paused child is resumed. */
-async function onAttached(host: InjectSessionHost, params: any) {
-  const sessionId: string = params.sessionId;
+/** Registers every script in a new OOPIF before the hub resumes it; failures are listed. */
+export async function setupInjectChild(host: InjectSessionHost, sessionId: string) {
   try {
-    if (params.targetInfo?.type === 'iframe') {
-      for (const script of [...host.inject.scripts.values()]) {
-        await registerOn(host, sessionId, script);
-      }
+    for (const script of [...host.inject.scripts.values()]) {
+      await registerOn(host, sessionId, script);
     }
   } catch (error) {
     noteError(
       host.inject,
       `register in ${sessionId}: ${error instanceof Error ? error.message : error}`,
     );
-  } finally {
-    if (params.waitingForDebugger) {
-      await send(host, sessionId, 'Runtime.runIfWaitingForDebugger').catch((error) =>
-        noteError(
-          host.inject,
-          `resume ${sessionId}: ${error instanceof Error ? error.message : error}`,
-        ),
-      );
-    }
   }
 }
 
@@ -182,11 +149,6 @@ export function trackInjectEvent(
 ): HookEvent | 'consumed' | undefined {
   const state = host.inject;
   switch (method) {
-    case 'Target.attachedToTarget':
-      if (params?.sessionId && (state.scripts.size > 0 || params.waitingForDebugger)) {
-        void onAttached(host, params);
-      }
-      return undefined;
     case 'Target.detachedFromTarget':
       if (params?.sessionId) {
         state.pageReady.delete(params.sessionId);
@@ -296,7 +258,7 @@ export async function addInjection(
   try {
     await registerOn(host, '', injection);
     // Before registering on current children: an OOPIF created from now on waits for us.
-    await setWaitOnStart(host, true);
+    await holdChildStart(host, 'inject');
   } catch (error) {
     state.scripts.delete(id);
     const root = injection.identifiers.get('');
@@ -305,7 +267,7 @@ export async function addInjection(
         () => undefined,
       );
     }
-    if (state.scripts.size === 0) await setWaitOnStart(host, false).catch(() => undefined);
+    if (state.scripts.size === 0) await releaseChildStart(host, 'inject').catch(() => undefined);
     throw error;
   }
   const childErrors: Array<{ sessionId: string; error: string }> = [];
@@ -345,7 +307,7 @@ export async function removeInjection(host: InjectSessionHost, id: string): Prom
   }
   if (state.scripts.size === 0) {
     try {
-      await setWaitOnStart(host, false);
+      await releaseChildStart(host, 'inject');
     } catch (error) {
       errors.push(`disable wait on start: ${error instanceof Error ? error.message : error}`);
     }

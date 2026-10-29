@@ -21,8 +21,6 @@ export const TOOL_NAMES = {
     NETWORK_CAPTURE_START: 'chrome_network_capture_start',
     NETWORK_CAPTURE_STOP: 'chrome_network_capture_stop',
     NETWORK_REQUEST: 'chrome_network_request',
-    NETWORK_DEBUGGER_START: 'chrome_network_debugger_start',
-    NETWORK_DEBUGGER_STOP: 'chrome_network_debugger_stop',
     KEYBOARD: 'chrome_keyboard',
     HISTORY: 'chrome_history',
     BOOKMARK_SEARCH: 'chrome_bookmark_search',
@@ -35,6 +33,7 @@ export const TOOL_NAMES = {
     CDP_SCRIPTS: 'chrome_cdp_scripts',
     CDP_DEBUGGER: 'chrome_cdp_debugger',
     CDP_INJECT: 'chrome_cdp_inject',
+    CDP_NETWORK: 'chrome_cdp_network',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -1136,7 +1135,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.NETWORK_CAPTURE,
     description:
-      'Unified network capture tool. Use action="start" to begin capturing, action="stop" to end and retrieve results. Set needResponseBody=true to capture response bodies (uses Debugger API, may conflict with DevTools). Default mode uses webRequest API (lightweight, no debugger conflict, but no response body).',
+      'Lightweight network capture through the webRequest API: action="start" begins capturing, action="stop" ends it and returns method, url, status, type, and headers per request. No debugger is attached and no bodies are captured. For request/response bodies, wire headers with cookies, initiator stacks, WebSocket/SSE messages, or a HAR file, start chrome_cdp_session and use chrome_cdp_network.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1144,11 +1143,6 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'string',
           enum: ['start', 'stop'],
           description: 'Action to perform: "start" begins capture, "stop" ends and returns results',
-        },
-        needResponseBody: {
-          type: 'boolean',
-          description:
-            'When true, captures response body using Debugger API (default: false). Only use when you need to inspect response content.',
         },
         url: {
           type: 'string',
@@ -1893,6 +1887,114 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         id: {
           type: 'string',
           description: 'remove: injection id from add, hook, or list.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_NETWORK,
+    description:
+      'Request table of a tab held by chrome_cdp_session (start it first; its stop ends everything). start enables the Network domain on the tab and on every cross-site iframe and worker the session auto-attaches (a re-created iframe is paused until it is enabled), and records every request from then on, whatever the session event filter: method, url, type, status, timing, initiator with stack, the renderer headers and the wire headers (Cookie, Set-Cookie), redirects as linked rows, WebSocket frames, and EventSource messages. Bodies are read when a request finishes, because Chrome drops them once the document navigates: bodies="api" (default) keeps Document/XHR/Fetch/Other responses, "all" also scripts, styles, images, and fonts, "none" none; request bodies are kept whenever the page sends one. Each body keeps up to maxBodyBytes and all bodies share 32 MB (oldest evicted first); a body that was not kept is read from Chrome on demand while it still exists. list pages rows by seq (filter by url substring, method, types, status, state, sessionId); get returns one row in full with headers, auth (names of credential headers and cookies, never values), body previews, and timings; body pages the full request or response body (text by chars, binary as base64 by bytes); messages pages WebSocket/EventSource messages; har writes a HAR 1.2 file of the filtered rows into the Downloads folder and returns only its path; clear empties the table and keeps recording; stop disables Network and keeps the table readable. Credential header, cookie, and query values and embedded tokens are redacted unless sanitizeOutput is false. Iframes nested inside a cross-site iframe are not covered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['start', 'list', 'get', 'body', 'messages', 'har', 'clear', 'stop'],
+          description: 'start | list | get | body | messages | har | clear | stop.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        bodies: {
+          type: 'string',
+          enum: ['api', 'all', 'none'],
+          description: 'start: which response bodies to keep (default api).',
+        },
+        maxBodyBytes: {
+          type: 'number',
+          description: 'start: bytes kept per body (default 1048576, max 10485760).',
+        },
+        maxRequests: {
+          type: 'number',
+          description: 'start: rows kept, oldest dropped first (default 2000, max 10000).',
+        },
+        seq: {
+          type: 'number',
+          description: 'get, body, messages: row seq from list.',
+        },
+        part: {
+          type: 'string',
+          enum: ['request', 'response'],
+          description: 'body: which body (default response).',
+        },
+        url: {
+          type: 'string',
+          description: 'list, har: case-insensitive url substring.',
+        },
+        method: {
+          type: 'string',
+          description: 'list, har: HTTP method.',
+        },
+        types: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'list, har: CDP resource types, e.g. ["XHR","Fetch"], Document, Script, WebSocket, EventSource.',
+        },
+        status: {
+          type: 'number',
+          description: 'list, har: HTTP status.',
+        },
+        state: {
+          type: 'string',
+          enum: ['pending', 'complete', 'failed', 'open', 'closed'],
+          description: 'list, har: row state (open/closed are WebSocket states).',
+        },
+        sessionId: {
+          type: 'string',
+          description: 'list, har: child sessionId, or "root" for the tab itself.',
+        },
+        after: {
+          type: 'number',
+          description:
+            'list: rows with seq greater than this. messages: messages after this index.',
+        },
+        limit: {
+          type: 'number',
+          description: 'list, messages: page size (default 100, max 1000).',
+        },
+        offset: {
+          type: 'number',
+          description: 'body: start offset (chars for text, bytes for base64; default 0).',
+        },
+        length: {
+          type: 'number',
+          description: 'body: chars or bytes to return (default as much as maxOutputBytes allows).',
+        },
+        includeBodies: {
+          type: 'boolean',
+          description: 'har: include stored bodies and messages (default true).',
+        },
+        filename: {
+          type: 'string',
+          description:
+            'har: file name in the Downloads folder (letters, digits, "_", ".", "-"; .har is added). An existing name gets a number.',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'list, body, messages: maximum output bytes (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact credential header, cookie, and query values and embedded tokens in output and HAR (default true).',
         },
       },
       required: ['action'],

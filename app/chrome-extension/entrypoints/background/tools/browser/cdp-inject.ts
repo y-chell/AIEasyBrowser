@@ -168,7 +168,7 @@ class CdpInjectTool extends BaseBrowserToolExecutor {
       return createStructuredToolResult({
         ...base,
         injections: [...state.scripts.values()].map(describe),
-        waitOnStart: state.waitOnStart,
+        waitOnStart: session.childStart.waitOnStart,
         rejectedBindingCalls: state.rejected,
         ...(state.errors.length ? { errors: state.errors } : {}),
       });

@@ -16,9 +16,24 @@ import {
 import {
   clearInjectState,
   createInjectState,
+  setupInjectChild,
   trackInjectEvent,
   type InjectState,
 } from '@/utils/cdp-inject';
+import {
+  clearChildStartState,
+  createChildStartState,
+  noteChildStartError,
+  type ChildStartState,
+} from '@/utils/cdp-child-start';
+import {
+  createNetworkState,
+  endNetwork,
+  setupNetworkChild,
+  stopNetwork,
+  trackNetworkEvent,
+  type NetworkState,
+} from '@/utils/cdp-network';
 
 /**
  * Long-lived debugger sessions owned by one named CLI task.
@@ -69,6 +84,8 @@ export interface HeldSession {
   scripts: ScriptTable;
   debug: DebugState;
   inject: InjectState;
+  childStart: ChildStartState;
+  network: NetworkState;
   ended?: { at: number; reason: string };
 }
 
@@ -121,6 +138,29 @@ function pushEvent(session: HeldSession, method: string, params: unknown, sessio
   }
 }
 
+/** Every feature sets up a new child before it runs; a child attached paused is then resumed. */
+async function onChildAttached(session: HeldSession, params: any) {
+  const sessionId: string = params.sessionId;
+  const type: string | undefined = params.targetInfo?.type;
+  try {
+    if (type === 'iframe' && session.inject.scripts.size > 0) {
+      await setupInjectChild(session, sessionId);
+    }
+    await setupNetworkChild(session, sessionId, type);
+  } finally {
+    if (params.waitingForDebugger) {
+      await cdpSessionManager
+        .sendCommand(session.tabId, 'Runtime.runIfWaitingForDebugger', {}, sessionId)
+        .catch((error) =>
+          noteChildStartError(
+            session.childStart,
+            `resume ${sessionId}: ${error instanceof Error ? error.message : error}`,
+          ),
+        );
+    }
+  }
+}
+
 function handleEvent(source: chrome.debugger.DebuggerSession, method: string, params?: any) {
   if (typeof source.tabId !== 'number') return;
   const session = sessions.get(source.tabId);
@@ -137,8 +177,12 @@ function handleEvent(source: chrome.debugger.DebuggerSession, method: string, pa
   } else if (method === 'Target.detachedFromTarget' && params?.sessionId) {
     session.targets.delete(params.sessionId);
   }
-  // The script table is maintained regardless of the event filter.
+  if (method === 'Target.attachedToTarget' && params?.sessionId) {
+    void onChildAttached(session, params);
+  }
+  // The script and request tables are maintained regardless of the event filter.
   trackScriptEvent(session, method, params, source.sessionId);
+  trackNetworkEvent(session, method, params, source.sessionId);
   trackDebugEvent(session, method, params, source.sessionId);
   // Hook records are buffered whatever the filter; the raw binding call never is.
   const hook = trackInjectEvent(session, method, params, source.sessionId);
@@ -171,6 +215,8 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string) {
   clearScripts(session.scripts);
   clearDebugState(session.debug);
   clearInjectState(session.inject);
+  clearChildStartState(session.childStart);
+  endNetwork(session.network);
   pruneEnded();
 }
 
@@ -252,6 +298,8 @@ export async function startSession(
     scripts: createScriptTable(),
     debug: createDebugState(),
     inject: createInjectState(),
+    childStart: createChildStartState(),
+    network: createNetworkState(),
   };
   // Register before auto-attach: Target.attachedToTarget arrives before the command resolves.
   sessions.set(tabId, session);
@@ -280,6 +328,7 @@ export async function stopSession(tabId: number, owner: string): Promise<string[
     session.ended = { at: Date.now(), reason: 'stopped' };
     // Resume before Debugger.disable so a paused page is never left frozen.
     errors.push(...(await releaseDebugger(session)));
+    errors.push(...(await stopNetwork(session)).map((error) => `disable network: ${error}`));
     try {
       await disableScriptDebugger(session);
     } catch (error) {
@@ -303,6 +352,7 @@ export async function stopSession(tabId: number, owner: string): Promise<string[
     }
     // Detach removed the registrations and the binding in Chrome.
     clearInjectState(session.inject);
+    clearChildStartState(session.childStart);
   }
   sessions.delete(tabId);
   return errors;

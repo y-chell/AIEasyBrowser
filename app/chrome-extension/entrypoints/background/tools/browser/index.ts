@@ -10,7 +10,6 @@ export { clickTool, fillTool } from './interaction';
 export { networkRequestTool } from './network-request';
 export { networkCaptureTool } from './network-capture';
 // Legacy exports (for internal use by networkCaptureTool)
-export { networkDebuggerStartTool, networkDebuggerStopTool } from './network-capture-debugger';
 export { networkCaptureStartTool, networkCaptureStopTool } from './network-capture-web-request';
 export { keyboardTool } from './keyboard';
 export { historyTool } from './history';
@@ -21,6 +20,7 @@ export { cdpSessionTool } from './cdp-session';
 export { cdpScriptsTool } from './cdp-scripts';
 export { cdpDebuggerTool } from './cdp-debugger';
 export { cdpInjectTool } from './cdp-inject';
+export { cdpNetworkTool } from './cdp-network';
 export { consoleTool } from './console';
 export { collectDebugEvidenceTool } from './debug-evidence';
 export { fileUploadTool, uploadStatusTool } from './file-upload';

@@ -43,6 +43,7 @@ const EXPECTED_TOOLS = [
   'chrome_cdp_scripts',
   'chrome_cdp_debugger',
   'chrome_cdp_inject',
+  'chrome_cdp_network',
   'chrome_click_element',
   'chrome_fill_or_select',
   'chrome_keyboard',
@@ -70,6 +71,7 @@ const VALID_REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
   chrome_cdp_scripts: { action: 'list' },
   chrome_cdp_debugger: { action: 'status' },
   chrome_cdp_inject: { action: 'list' },
+  chrome_cdp_network: { action: 'list' },
   chrome_fill_or_select: { value: false },
   chrome_keyboard: { keys: 'Enter' },
   chrome_upload_file: { selector: '#fixture' },
@@ -151,6 +153,14 @@ const INVALID_ARGS: Array<[string, Record<string, unknown>, string]> = [
   ['chrome_cdp_inject', { action: 'hook', hook: 'property', access: 'read' }, 'args/access'],
   ['chrome_cdp_inject', { action: 'add', source: 1 }, 'args/source'],
   ['chrome_cdp_inject', { action: 'hook', hook: 'fetch', maxRecords: '9' }, 'args/maxRecords'],
+  ['chrome_cdp_network', {}, 'args/action'],
+  ['chrome_cdp_network', { action: 'replay' }, 'args/action'],
+  ['chrome_cdp_network', { action: 'start', bodies: 'some' }, 'args/bodies'],
+  ['chrome_cdp_network', { action: 'body', seq: '1' }, 'args/seq'],
+  ['chrome_cdp_network', { action: 'body', seq: 1, part: 'both' }, 'args/part'],
+  ['chrome_cdp_network', { action: 'list', types: 'XHR' }, 'args/types'],
+  ['chrome_cdp_network', { action: 'list', state: 'done' }, 'args/state'],
+  ['chrome_network_capture', { action: 'start', needResponseBody: true }, 'args/needResponseBody'],
   ['chrome_cdp_command', { method: 'Runtime.evaluate', sessionId: 7 }, 'args/sessionId'],
   [
     'chrome_cdp_batch',
@@ -188,14 +198,14 @@ describe('direct browser capability contracts', () => {
     };
     for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
     expect(counts).toEqual({
-      type: 466,
-      properties: 53,
-      required: 49,
-      additionalProperties: 53,
-      description: 380,
-      enum: 37,
+      type: 489,
+      properties: 54,
+      required: 50,
+      additionalProperties: 54,
+      description: 401,
+      enum: 41,
       oneOf: 2,
-      items: 6,
+      items: 7,
     });
   });
 
@@ -220,9 +230,9 @@ describe('direct browser capability contracts', () => {
     }
   });
 
-  test('keeps all 43 browser capabilities unique and discoverable', () => {
+  test('keeps all 44 browser capabilities unique and discoverable', () => {
     expect(TOOL_SCHEMAS.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
-    expect(new Set(EXPECTED_TOOLS).size).toBe(43);
+    expect(new Set(EXPECTED_TOOLS).size).toBe(44);
     for (const tool of TOOL_SCHEMAS) {
       expect(tool.inputSchema.type).toBe('object');
       expect(typeof tool.description).toBe('string');
