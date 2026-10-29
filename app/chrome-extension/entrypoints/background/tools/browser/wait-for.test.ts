@@ -54,6 +54,7 @@ describe('JavaScript condition execution', () => {
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
     expect(javascriptTool.execute).toHaveBeenCalledWith(
       expect.objectContaining({ tabId: 7, maxOutputBytes: 1024 }),
+      undefined,
     );
   });
   test('does not interpret the string output "false" as truthy', async () => {
@@ -71,16 +72,24 @@ describe('JavaScript condition execution', () => {
     vi.mocked(javascriptTool.execute).mockResolvedValueOnce(
       createStructuredToolResult({ success: true, result: 'false' }),
     );
-    const passed = await waitForTool.execute({
-      tabId: 7,
-      frameId: 5,
-      timeoutMs: 500,
-      pollIntervalMs: 50,
-      condition: { kind: 'javascript', predicate: 'true' },
-    });
+    // The task owner reaches chrome_javascript so a cross-process frame can use the held session.
+    const context = { owner: 'cli:A' };
+    const passed = await waitForTool.execute(
+      {
+        tabId: 7,
+        frameId: 5,
+        timeoutMs: 500,
+        pollIntervalMs: 50,
+        condition: { kind: 'javascript', predicate: 'true' },
+      },
+      context,
+    );
     expect(passed.isError).toBe(false);
     expect(javascriptTool.execute).toHaveBeenCalledTimes(2);
-    expect(javascriptTool.execute).toHaveBeenCalledWith(expect.objectContaining({ frameId: 5 }));
+    expect(javascriptTool.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ frameId: 5 }),
+      context,
+    );
   });
   test.each(['Promise.resolve(true)', 'async () => true'])(
     'rejects asynchronous predicates with an explicit error: %s',

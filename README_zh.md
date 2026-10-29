@@ -165,9 +165,9 @@ aieasybrowser --session github act '[{"op":"fill","ref":"<ref>","value":"terms"}
 
 `act` 最多顺序执行 20 个 `click` / `fill` / `press` 动作，可检查 `element`、`text`、`url`、`title`、同步 `javascript` 或 `networkIdle` 后置条件，默认返回新扫描。异步页面动作应提供网站特定的后置条件；工具不会猜测“点击成功”是否等于任务完成。`wait '<条件 JSON>'` 只等待条件并重新扫描，不重放动作。`open <url>` 按底层规则打开或复用 URL，`open --current` 导航已选标签；打开不等于页面已就绪。
 
-JavaScript 条件复用 `chrome_javascript` 的执行引擎：顶层页面默认使用 CDP，不再在网页 MAIN world 中动态 eval 条件字符串，可能显示 Chrome 调试提示；显式非零 `frameId` 使用该工具的 ISOLATED frame 执行，访问的是该 world 的环境。需要 iframe 的页面主世界或跨域 CDP context 时，使用已有 CDP 工具。执行、语法或序列化错误会立即失败，不再当作“条件暂未满足”反复等待；要等待尚不存在的对象，谓词应显式返回 `false`，而不是解引用空对象。
+JavaScript 条件复用 `chrome_javascript`：一律经 CDP 执行，可能显示 Chrome 调试提示；带 `frameId` 时在该 frame 的 MAIN world 求值，跨站 iframe 内的 frame 需要本任务已在该标签 start 的 `chrome_cdp_session`。执行、语法或序列化错误会立即失败，不再当作“条件暂未满足”反复等待；要等待尚不存在的对象，谓词应显式返回 `false`，而不是解引用空对象。
 
-P4 实测发现当前 MV3 构建的显式非零 frame 动态 JS 路径被扩展 CSP 拒绝；它会明确失败，不会自动转到顶层执行。该路径尚未修复，不能视作 iframe JS/JavaScript 条件已验收。frame 内 DOM 读取使用带 `frameId` 的 scan/query；自定义 iframe JavaScript 需使用明确选定 context 的 CDP，不应修改 CSP 放行动态 eval。
+`chrome_javascript` 没有 `chrome.scripting` 回退（旧的 ISOLATED `new AsyncFunction` 回退在扩展 CSP 下必然失败，已删除），DevTools 或其他扩展占用调试器时返回 `error.kind: "debugger_conflict"`。三种上下文最多选一种：`frameId`（scan 或 `chrome_list_frames` 给出的任意 frame，`world` 可选 `MAIN` 默认或 `ISOLATED`）、`sessionId`（持有会话中的 dedicated/service worker 或跨站 iframe 根）、`workerTargetId`（shared worker）。扩展 frameId 与 CDP frameId 没有共同键，执行前逐级用父 frame 中 `window.frames` 下标定位 iframe 元素并取其 CDP frameId，执行后核对 frame 的 documentId，期间导航返回 `FRAME_CHANGED`；不会改到别的 frame 或顶层执行。ISOLATED 是 AEB 自己的 world，对页面不可见，全局变量保留到 frame 导航。CLI 的 `eval --frame <id>` 只走 MAIN，ISOLATED 用 `call chrome_javascript`。结果带实际执行的 `frameId`、`world`、`cdpFrameId`、`sessionId` 或 `workerTargetId`。
 
 默认扫描最多返回 40 个元素、10 个文本块、20 个 frame 摘要和 10 条 frame 错误，元素/文本限制是整页全局预算，而非每个 iframe 单独计算。`truncated: true` 或非空 `errors` 不代表已经看到完整页面；可指定 `scan --frame <id>` 或调整预算。表单值不自动回显，受保护字段会标记 `protected`。
 
@@ -206,7 +206,7 @@ aieasybrowser --session github session --forget
 
 `chrome_computer` 的坐标、拖动起点和区域始终为**当前顶层 viewport CSS 像素**，不受历史截图影响。旧实现会按截图上下文隐式缩放，这一行为已移除；依赖旧缩放的调用方需自行转换图像坐标。未缩放 viewport PNG 的物理像素约为 viewport × DPR；缩略图、裁剪图或整页图还要考虑各自尺寸、原点及当前滚动，不能一律除以 DPR。优先用当前 `getBoundingClientRect()`，布局变化后重新测量。iframe 内坐标需转换到顶层 viewport；跨域限制不等于无法扫描该 frame，也不使 ref 点击变成 trusted input。
 
-Chrome 156 的跨站 iframe 样本中，trusted 坐标点击在 P4 两轮只到达 iframe 容器，2026-10-28 后续 3 轮送达子控件，代码未变，原因未定位。不保证跨域 trusted 输入可用；必须核对子 frame 状态，不能把输入 API 成功当作交互完成。
+Chrome 156 的跨站 iframe 样本中，trusted 坐标点击有时送达子控件、有时只到达 iframe 容器，代码与坐标相同；B4 按窗口状态、焦点、是否刚重载扩展、其他调试客户端对比 7 轮，均不能解释差异，原因未定位（见 `docs/KNOWN-ISSUES.md`）。不保证跨域 trusted 输入可用；必须核对子 frame 状态，不能把输入 API 成功当作交互完成。
 
 ### 持续 CDP 会话
 
@@ -222,6 +222,8 @@ aieasybrowser --session re call chrome_cdp_session '{"action":"stop"}'
 `start` 默认以 `flatten` 方式自动附着跨站 iframe 和 worker，`status.targets` 给出它们的 `sessionId`，传给 `chrome_cdp_command` / `chrome_cdp_batch` 即可在该上下文执行；未知或已分离的 sessionId 在发给 Chrome 前即拒绝。同站 iframe 不是独立 target。事件存放在扩展内存的环形缓冲（默认 1000 条，最多 10000 条，另有 8 MB 上限），用 `after` 游标分页；`missed` / `dropped` 非零表示有事件因溢出丢失。输出默认脱敏，`sanitizeOutput:false` 返回原值。
 
 会话归启动它的命名任务所有，其他任务访问返回 `CDP_SESSION_OWNED`。会话期间 Chrome 会持续显示调试提示条。用户取消提示条、DevTools 接管或页面崩溃会使会话结束（`active:false` 和 `ended.reason`），已缓冲事件在 `stop` 前仍可读；关闭标签直接丢弃会话。扩展重载或 Native Host 退出后状态丢失，需要重新 `start`。用完必须 `stop`，`session --forget` 不会释放 Chrome 中的调试会话。
+
+`{"action":"workers"}` 列出 `sessions`（自动附着的 dedicated worker、作用域内的 service worker，`sessionId` 传给 `chrome_javascript` 或 CDP 命令）和 `browserTargets`（不属于页面子 target 的 worker，如 shared worker，按标签各 frame 的 origin 筛选，`workerTargetId` 传给 `chrome_javascript`，只在该次调用期间附着）。跨站 iframe 内的 frame 用 `chrome_javascript {frameId}` 时也走本任务持有会话的子 session；没有会话返回 `CDP_SESSION_NOT_STARTED`，他人会话返回 `CDP_SESSION_OWNED`。owner 元素在 shadow root 中的 frame 返回 `FRAME_MAPPING_FAILED`；跨站 iframe 内再嵌套的跨站 iframe 不会自动附着，返回 `FRAME_TARGET_NOT_ATTACHED`。
 
 持有会话期间，`chrome_cdp_scripts` 列出、读取和搜索页面脚本（外链 bundle、内联、eval，以及 iframe/worker 子会话中的脚本）：
 
@@ -306,6 +308,7 @@ pnpm test:cli-long-task
 pnpm test:cli-cdp-session
 pnpm test:cli-cdp-scripts
 pnpm test:cli-cdp-debugger
+pnpm test:cli-cdp-contexts
 pnpm run build
 ```
 
@@ -332,6 +335,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-scripts` 同样要求已重载包含 `chrome_cdp_scripts` 的扩展。临时网页含一个约 23 万字符、单行的外链 bundle（带 sourceMappingURL 和中文）、两段内联脚本、一段 eval 和跨站 iframe。脚本验证：未 start 时拒绝且不附着；bundle 分页读取后与服务端文件逐字相同、每页不超过字节上限；同一 runId 在 bundle、内联、eval 中的命中坐标与在源文件中算出的位置一致，游标逐条翻页结果与一次搜索相同；页面的 `debugger;` 不暂停；新建 worker 的脚本可搜到；未知 scriptId、非法参数、其他任务访问被拒绝；导航后旧脚本被清除；`stop` 后无调试附着。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 `pnpm test:cli-cdp-debugger` 要求已重载包含 `chrome_cdp_debugger` 的扩展。临时网页加载一个按标记注释定位行号的外链脚本和跨站 iframe。脚本验证：一个 CLI 进程的 `wait` 收到另一个任务触发的 url 断点暂停，之后各独立进程读取调用栈（`compute` ← `trigger`）、局部变量（敏感名默认隐藏）、帧内求值和 `stepOver` / `stepOut`；另一个任务的同步 eval 卡在暂停页面时仍能恢复，恢复后该调用返回；无断点时 `debugger;` 不停；条件断点只在条件成立时停；logpoint 打出 console 不暂停；XHR、click 监听断点；跨站 iframe 子会话断点；导航后 url 断点仍命中、scriptId 断点不再命中；暂停中 `stop` 后页面继续执行并分离。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-cdp-contexts` 要求已重载包含 `chrome_cdp_session workers` 的扩展。临时网页带 `script-src 'self' 'unsafe-inline'` CSP（页面自身 `eval` 被拒），含同站 iframe、两个同 URL 的同站 iframe、跨站 iframe 及其内部嵌套 iframe，并创建 dedicated worker、shared worker 和 service worker。脚本验证：同站 frame 的 MAIN 求值（`eval --frame` 与 `chrome_javascript`）和 `wait --frame`；两个同 URL frame 各自命中自己的文档；ISOLATED 全局在调用间保留且 MAIN 看不到；未 start 时跨站 frame 返回 `CDP_SESSION_NOT_STARTED` 且不在其他 frame 执行；start 后跨站 frame 与其嵌套 frame 的 MAIN/ISOLATED 求值，其他任务返回 `CDP_SESSION_OWNED`；`workers` 列出三类 worker 且各自可求值，shared worker 调用后不留附着；未知 frame/worker/session 和非法参数被拒；`stop` 后无调试附着、跨站 frame 再次被拒。结束注销 service worker、关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 ## 许可证
 

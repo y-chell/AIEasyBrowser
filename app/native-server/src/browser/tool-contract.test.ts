@@ -77,6 +77,10 @@ const VALID_REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
 const INVALID_ARGS: Array<[string, Record<string, unknown>, string]> = [
   ['chrome_javascript', {}, 'args/code'],
   ['chrome_javascript', { code: false }, 'args/code'],
+  ['chrome_javascript', { code: 'return 1', world: 'main' }, 'args/world'],
+  ['chrome_javascript', { code: 'return 1', sessionId: 3 }, 'args/sessionId'],
+  ['chrome_javascript', { code: 'return 1', workerTargetId: false }, 'args/workerTargetId'],
+  ['chrome_cdp_session', { action: 'worker' }, 'args/action'],
   ['chrome_switch_tab', { tabId: '7' }, 'args/tabId'],
   ['chrome_list_frames', { includeDetails: 'false' }, 'args/includeDetails'],
   ['chrome_list_frames', { tabId: null }, 'args/tabId'],
@@ -176,12 +180,12 @@ describe('direct browser capability contracts', () => {
     };
     for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
     expect(counts).toEqual({
-      type: 450,
+      type: 453,
       properties: 52,
       required: 48,
       additionalProperties: 52,
-      description: 365,
-      enum: 33,
+      description: 368,
+      enum: 34,
       oneOf: 2,
       items: 6,
     });

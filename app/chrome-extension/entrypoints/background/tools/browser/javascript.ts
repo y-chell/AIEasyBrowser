@@ -1,9 +1,17 @@
 /**
- * JavaScript Tool - CDP Runtime.evaluate with fallback
+ * JavaScript Tool - CDP execution in a chosen context
  *
- * Execute JavaScript in the browser tab and return the result.
- * - Primary: CDP Runtime.evaluate (supports awaitPromise + returnByValue)
- * - Fallback: chrome.scripting.executeScript (when debugger is busy)
+ * Execute JavaScript in the browser tab and return the result. Every path goes through CDP:
+ * - Top frame, MAIN world: Runtime.evaluate on the page.
+ * - frameId (any frame) and/or world ISOLATED: the frame is mapped to its CDP frame and session
+ *   (cdp-frames.ts); MAIN runs on that frame's document, ISOLATED in Page.createIsolatedWorld.
+ *   Cross-process frames use the task's held chrome_cdp_session child session.
+ * - sessionId: a held child session (worker, service worker, OOPIF root).
+ * - workerTargetId: a browser-level worker target (shared worker) attached for this call only.
+ *
+ * There is no chrome.scripting fallback: the extension CSP forbids building a function from a
+ * string in the ISOLATED world (KI-08), so that path could never run user code. A busy debugger
+ * or an unresolvable context fails explicitly instead of executing somewhere else.
  *
  * Features:
  * - Async code support (top-level await via async wrapper)
@@ -15,8 +23,11 @@
 
 import { createErrorResponse, createStructuredToolResult, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import { resolveChildSession } from '@/utils/cdp-event-hub';
+import { browserWorkerTargets, resolveFrame, type ResolvedFrame } from '@/utils/cdp-frames';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   sanitizeAndLimitOutput,
@@ -29,12 +40,18 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const CDP_SESSION_KEY = 'javascript';
+const DEBUGGER_PROTOCOL_VERSION = '1.3';
+// Reused across calls, so globals set in the isolated world persist until the frame navigates.
+const ISOLATED_WORLD_NAME = 'aeb-javascript';
+const OBJECT_GROUP = 'aeb-javascript';
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type ExecutionEngine = 'cdp' | 'scripting';
+type ExecutionEngine = 'cdp';
+
+type World = 'MAIN' | 'ISOLATED';
 
 type ErrorKind =
   | 'debugger_conflict'
@@ -42,13 +59,16 @@ type ErrorKind =
   | 'syntax_error'
   | 'runtime_error'
   | 'cdp_error'
-  | 'scripting_error';
+  | 'target_error';
 
 interface JavaScriptToolParams {
   code: string;
   tabId?: number;
   windowId?: number;
   frameId?: number;
+  world?: World;
+  sessionId?: string;
+  workerTargetId?: string;
   timeoutMs?: number;
   maxOutputBytes?: number;
 }
@@ -67,15 +87,23 @@ interface ExecutionMetrics {
   elapsedMs: number;
 }
 
-interface JavaScriptToolResult {
+/** Where the code ran, as reported back to the caller. */
+interface ExecutionTarget {
+  frameId?: number;
+  /** Frames only; a worker or child session runs in its single main context. */
+  world?: World;
+  cdpFrameId?: string;
+  sessionId?: string;
+  workerTargetId?: string;
+}
+
+interface JavaScriptToolResult extends ExecutionTarget {
   success: boolean;
   tabId: number;
-  frameId?: number;
   engine: ExecutionEngine;
   result?: string;
   truncated?: boolean;
   redacted?: boolean;
-  warnings?: string[];
   error?: ExecutionError;
   metrics?: ExecutionMetrics;
 }
@@ -89,6 +117,7 @@ interface ExecutionOptions {
 type ExecutionSuccess = {
   ok: true;
   engine: ExecutionEngine;
+  target: ExecutionTarget;
   output: string;
   truncated: boolean;
   redacted: boolean;
@@ -97,6 +126,7 @@ type ExecutionSuccess = {
 type ExecutionFailure = {
   ok: false;
   engine: ExecutionEngine;
+  target: ExecutionTarget;
   error: ExecutionError;
 };
 
@@ -221,33 +251,29 @@ function parseExceptionDetails(details: CDPExceptionDetails): ExecutionError {
   };
 }
 
-async function executeViaCdp(
-  tabId: number,
-  code: string,
+// Prefixes of frame/session/worker resolution failures (cdp-frames.ts, cdp-event-hub.ts).
+const TARGET_ERROR = /^(FRAME_[A-Z_]+|CDP_SESSION_[A-Z_]+|CDP_UNKNOWN_SESSION|WORKER_[A-Z_]+):/;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Runs one CDP evaluation and classifies its outcome. */
+async function execute(
+  target: ExecutionTarget,
   options: ExecutionOptions,
+  run: () => Promise<CDPEvaluateResult>,
 ): Promise<ExecutionResult> {
   try {
-    const expression = wrapUserCode(code);
-
-    const response = await withTimeout(
-      cdpSessionManager.withSession(tabId, CDP_SESSION_KEY, async () => {
-        return (await cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
-          expression,
-          returnByValue: true,
-          awaitPromise: true,
-          // CDP 内置超时（毫秒），与外层 withTimeout 双重保障
-          timeout: options.timeoutMs,
-        })) as CDPEvaluateResult;
-      }),
-      // 外层超时稍长，给 CDP 一点余量处理超时响应
-      options.timeoutMs + 1000,
-    );
+    // 外层超时稍长，给 CDP 一点余量处理超时响应
+    const response = await withTimeout(run(), options.timeoutMs + 1000);
 
     // Check for exception
     if (response?.exceptionDetails) {
       return {
         ok: false,
         engine: 'cdp',
+        target,
         error: parseExceptionDetails(response.exceptionDetails),
       };
     }
@@ -259,6 +285,7 @@ async function executeViaCdp(
     return {
       ok: true,
       engine: 'cdp',
+      target,
       output: sanitized.text,
       truncated: sanitized.truncated,
       redacted: sanitized.redacted,
@@ -268,141 +295,201 @@ async function executeViaCdp(
       return {
         ok: false,
         engine: 'cdp',
+        target,
         error: { kind: 'timeout', message: error.message },
       };
     }
 
-    if (isDebuggerConflictError(error)) {
-      const message = sanitizeText(error instanceof Error ? error.message : String(error)).text;
-      return {
-        ok: false,
-        engine: 'cdp',
-        error: { kind: 'debugger_conflict', message },
-      };
-    }
-
-    const message = sanitizeText(error instanceof Error ? error.message : String(error)).text;
-    return {
-      ok: false,
-      engine: 'cdp',
-      error: { kind: 'cdp_error', message },
-    };
+    const message = sanitizeText(errorMessage(error)).text;
+    const kind: ErrorKind = isDebuggerConflictError(error)
+      ? 'debugger_conflict'
+      : TARGET_ERROR.test(errorMessage(error))
+        ? 'target_error'
+        : 'cdp_error';
+    return { ok: false, engine: 'cdp', target, error: { kind, message } };
   }
 }
 
 // ============================================================================
-// chrome.scripting.executeScript Fallback
+// Execution Contexts
 // ============================================================================
 
-interface ScriptingExecutionResult {
-  ok: boolean;
-  value?: unknown;
-  error?: {
-    name?: string;
-    message?: string;
-    stack?: string;
+function evaluateParams(code: string, options: ExecutionOptions) {
+  return {
+    expression: wrapUserCode(code),
+    returnByValue: true,
+    awaitPromise: true,
+    // CDP 内置超时（毫秒），与外层 withTimeout 双重保障
+    timeout: options.timeoutMs,
   };
 }
 
-async function executeViaScripting(
+/** Page top frame, MAIN world. */
+function executeOnPage(tabId: number, code: string, options: ExecutionOptions) {
+  return execute({ frameId: 0, world: 'MAIN' }, options, () =>
+    cdpSessionManager.withSession(tabId, CDP_SESSION_KEY, () =>
+      cdpSessionManager.sendCommand<CDPEvaluateResult>(
+        tabId,
+        'Runtime.evaluate',
+        evaluateParams(code, options),
+      ),
+    ),
+  );
+}
+
+/**
+ * Main world of a frame that is not the main frame of its CDP session. Runtime.evaluate needs a
+ * context ID, which only Runtime.enable reports; enabling Runtime on a shared attach would change
+ * the domain state of a held session. The frame's document node instead resolves to an object in
+ * that frame's main world, and callFunctionOn runs the code there.
+ */
+async function evaluateInSubframe(
   tabId: number,
+  frame: ResolvedFrame,
+  code: string,
+): Promise<CDPEvaluateResult> {
+  const { backendNodeId } = await cdpSessionManager.sendCommand<{ backendNodeId: number }>(
+    tabId,
+    'DOM.getFrameOwner',
+    { frameId: frame.cdpFrameId },
+    frame.sessionId,
+  );
+  const { node } = await cdpSessionManager.sendCommand<{
+    node?: { contentDocument?: { backendNodeId: number } };
+  }>(tabId, 'DOM.describeNode', { backendNodeId, depth: 1 }, frame.sessionId);
+  const documentNode = node?.contentDocument?.backendNodeId;
+  if (documentNode === undefined) {
+    throw new Error(`FRAME_MAPPING_FAILED: frame ${frame.frameId} has no document in its session`);
+  }
+  const { object } = await cdpSessionManager.sendCommand<{ object: { objectId?: string } }>(
+    tabId,
+    'DOM.resolveNode',
+    { backendNodeId: documentNode, objectGroup: OBJECT_GROUP },
+    frame.sessionId,
+  );
+  try {
+    return await cdpSessionManager.sendCommand<CDPEvaluateResult>(
+      tabId,
+      'Runtime.callFunctionOn',
+      {
+        objectId: object.objectId,
+        // Same body position as wrapUserCode, so reported line numbers match the top frame.
+        functionDeclaration: `function () { return (async function () {\n${code}\n}).call(globalThis); }`,
+        returnByValue: true,
+        awaitPromise: true,
+      },
+      frame.sessionId,
+    );
+  } finally {
+    await cdpSessionManager
+      .sendCommand(
+        tabId,
+        'Runtime.releaseObjectGroup',
+        { objectGroup: OBJECT_GROUP },
+        frame.sessionId,
+      )
+      .catch(() => undefined);
+  }
+}
+
+/** Any frame chosen by extension frame ID, in its MAIN or a dedicated ISOLATED world. */
+function executeInFrame(
+  tabId: number,
+  frameId: number,
+  world: World,
+  owner: string | undefined,
   code: string,
   options: ExecutionOptions,
-  frameId?: number,
-): Promise<ExecutionResult> {
-  const innerExecute = async (): Promise<ExecutionResult> => {
-    const target: chrome.scripting.InjectionTarget = { tabId };
-    if (typeof frameId === 'number') {
-      target.frameIds = [frameId];
+) {
+  const target: ExecutionTarget = { frameId, world };
+  return execute(target, options, () =>
+    cdpSessionManager.withSession(tabId, CDP_SESSION_KEY, async () => {
+      const frame = await resolveFrame(tabId, frameId, owner);
+      target.cdpFrameId = frame.cdpFrameId;
+      if (frame.sessionId) target.sessionId = frame.sessionId;
+      if (world === 'ISOLATED') {
+        const { executionContextId } = await cdpSessionManager.sendCommand<{
+          executionContextId: number;
+        }>(
+          tabId,
+          'Page.createIsolatedWorld',
+          { frameId: frame.cdpFrameId, worldName: ISOLATED_WORLD_NAME },
+          frame.sessionId,
+        );
+        return cdpSessionManager.sendCommand<CDPEvaluateResult>(
+          tabId,
+          'Runtime.evaluate',
+          { ...evaluateParams(code, options), contextId: executionContextId },
+          frame.sessionId,
+        );
+      }
+      if (frame.sessionRoot) {
+        // Without contextId, Runtime.evaluate uses the default context of the session's main frame.
+        return cdpSessionManager.sendCommand<CDPEvaluateResult>(
+          tabId,
+          'Runtime.evaluate',
+          evaluateParams(code, options),
+          frame.sessionId,
+        );
+      }
+      return evaluateInSubframe(tabId, frame, code);
+    }),
+  );
+}
+
+/** Held child session of this task: dedicated/service worker or OOPIF root. */
+function executeInSession(
+  tabId: number,
+  sessionId: string,
+  owner: string | undefined,
+  code: string,
+  options: ExecutionOptions,
+) {
+  return execute({ sessionId }, options, async () => {
+    if (!owner) {
+      throw new Error('CDP_SESSION_NOT_STARTED: sessionId requires a named task session');
     }
+    resolveChildSession(tabId, owner, sessionId);
+    return cdpSessionManager.sendCommand<CDPEvaluateResult>(
+      tabId,
+      'Runtime.evaluate',
+      evaluateParams(code, options),
+      sessionId,
+    );
+  });
+}
 
-    const results = await chrome.scripting.executeScript({
-      target,
-      world: 'ISOLATED',
-      func: async (userCode: string): Promise<ScriptingExecutionResult> => {
-        try {
-          // Use AsyncFunction constructor to support top-level await
-
-          const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-          const fn = new AsyncFunction(userCode);
-          const value = await fn();
-          return { ok: true, value };
-        } catch (err: unknown) {
-          const error = err as Error;
-          return {
-            ok: false,
-            error: {
-              name: error?.name ?? undefined,
-              message: error?.message ?? String(err),
-              stack: error?.stack ?? undefined,
-            },
-          };
-        }
-      },
-      args: [code],
-    });
-
-    // Extract the first result
-    const firstFrame = results?.[0];
-    const result = (firstFrame as { result?: ScriptingExecutionResult })?.result;
-
-    if (!result || typeof result !== 'object') {
-      return {
-        ok: false,
-        engine: 'scripting',
-        error: { kind: 'scripting_error', message: 'No result returned from executeScript' },
-      };
+/**
+ * A worker that is not a child of the tab (shared worker). Chrome does not auto-attach shared
+ * workers to a page and Target.attachToTarget is not allowed for extensions, so the worker is
+ * attached as its own debuggee for this call.
+ */
+function executeInWorkerTarget(
+  tabId: number,
+  workerTargetId: string,
+  code: string,
+  options: ExecutionOptions,
+) {
+  return execute({ workerTargetId }, options, async () => {
+    const workers = await browserWorkerTargets(tabId);
+    if (!workers.some((worker) => worker.id === workerTargetId)) {
+      throw new Error(
+        `WORKER_NOT_FOUND: ${workerTargetId} is not a worker target of an origin loaded in tab ${tabId}`,
+      );
     }
-
-    if (!result.ok) {
-      const rawMessage = result.error?.message ?? 'JavaScript execution failed';
-      const rawStack = result.error?.stack;
-
-      const message = sanitizeText(rawMessage).text;
-      const sanitizedStack = rawStack ? sanitizeText(rawStack).text : undefined;
-
-      const isSyntaxError = result.error?.name === 'SyntaxError' || /SyntaxError/i.test(rawMessage);
-
-      return {
-        ok: false,
-        engine: 'scripting',
-        error: {
-          kind: isSyntaxError ? 'syntax_error' : 'runtime_error',
-          message: sanitizedStack ? `${message}\n${sanitizedStack}` : message,
-        },
-      };
+    const debuggee = { targetId: workerTargetId };
+    await chrome.debugger.attach(debuggee, DEBUGGER_PROTOCOL_VERSION);
+    try {
+      return (await chrome.debugger.sendCommand(
+        debuggee,
+        'Runtime.evaluate',
+        evaluateParams(code, options),
+      )) as CDPEvaluateResult;
+    } finally {
+      // Same best-effort rule as cdpSessionManager.detach: the worker may already be gone.
+      await chrome.debugger.detach(debuggee).catch(() => undefined);
     }
-
-    // Sanitize the successful result
-    const sanitized = sanitizeAndLimitOutput(result.value, { maxBytes: options.maxOutputBytes });
-
-    return {
-      ok: true,
-      engine: 'scripting',
-      output: sanitized.text,
-      truncated: sanitized.truncated,
-      redacted: sanitized.redacted,
-    };
-  };
-
-  try {
-    return await withTimeout(innerExecute(), options.timeoutMs);
-  } catch (error) {
-    if (isTimeoutError(error)) {
-      return {
-        ok: false,
-        engine: 'scripting',
-        error: { kind: 'timeout', message: error.message },
-      };
-    }
-
-    const message = sanitizeText(error instanceof Error ? error.message : String(error)).text;
-    return {
-      ok: false,
-      engine: 'scripting',
-      error: { kind: 'scripting_error', message },
-    };
-  }
+  });
 }
 
 // ============================================================================
@@ -412,7 +499,10 @@ async function executeViaScripting(
 class JavaScriptTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.JAVASCRIPT;
 
-  async execute(args: JavaScriptToolParams): Promise<ToolResult> {
+  async execute(
+    args: JavaScriptToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
     const startTime = performance.now();
 
     try {
@@ -421,6 +511,8 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
       if (!code) {
         return createErrorResponse('Parameter [code] is required');
       }
+      const invalid = validateTarget(args);
+      if (invalid) return createErrorResponse(`INVALID_ARGUMENT: ${invalid}`);
 
       // Resolve target tab
       const tab = await this.resolveTargetTab(args.tabId, args.windowId);
@@ -440,49 +532,23 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
         timeoutMs: normalizePositiveInt(args.timeoutMs, DEFAULT_TIMEOUT_MS),
         maxOutputBytes: normalizePositiveInt(args.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
       };
+      const world: World = args.world ?? 'MAIN';
+      const owner = executionContext?.owner;
 
-      const warnings: string[] = [];
-      const frameId = typeof args.frameId === 'number' ? args.frameId : undefined;
-      const useFrameScopedScripting = typeof frameId === 'number' && frameId !== 0;
-
-      if (useFrameScopedScripting) {
-        warnings.push(
-          'frameId execution uses chrome.scripting.executeScript in ISOLATED world. For page-main-world or cross-origin CDP contexts, use chrome_cdp_command/chrome_cdp_batch.',
-        );
-
-        const scriptingResult = await executeViaScripting(tabId, code, options, frameId);
-
-        if (scriptingResult.ok) {
-          return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings, frameId);
-        }
-
-        return this.buildErrorResponse(tabId, scriptingResult, startTime, warnings, frameId);
+      let result: ExecutionResult;
+      if (typeof args.sessionId === 'string') {
+        result = await executeInSession(tabId, args.sessionId, owner, code, options);
+      } else if (typeof args.workerTargetId === 'string') {
+        result = await executeInWorkerTarget(tabId, args.workerTargetId, code, options);
+      } else if ((args.frameId ?? 0) === 0 && world === 'MAIN') {
+        result = await executeOnPage(tabId, code, options);
+      } else {
+        result = await executeInFrame(tabId, args.frameId ?? 0, world, owner, code, options);
       }
 
-      // Try CDP execution first
-      const cdpResult = await executeViaCdp(tabId, code, options);
-
-      if (cdpResult.ok) {
-        return this.buildSuccessResponse(tabId, cdpResult, startTime);
-      }
-
-      // If not a debugger conflict, return the CDP error
-      if (cdpResult.error.kind !== 'debugger_conflict') {
-        return this.buildErrorResponse(tabId, cdpResult, startTime);
-      }
-
-      // Debugger conflict - fallback to scripting API
-      warnings.push(
-        'Debugger is busy (DevTools or another extension attached). Falling back to chrome.scripting.executeScript (runs in ISOLATED world, not page context).',
-      );
-
-      const scriptingResult = await executeViaScripting(tabId, code, options);
-
-      if (scriptingResult.ok) {
-        return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings);
-      }
-
-      return this.buildErrorResponse(tabId, scriptingResult, startTime, warnings);
+      return result.ok
+        ? this.buildSuccessResponse(tabId, result, startTime)
+        : this.buildErrorResponse(tabId, result, startTime);
     } catch (error) {
       console.error('JavaScriptTool.execute error:', error);
       return createErrorResponse(
@@ -512,18 +578,15 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
     tabId: number,
     result: ExecutionSuccess,
     startTime: number,
-    warnings?: string[],
-    frameId?: number,
   ): ToolResult {
     const payload: JavaScriptToolResult = {
       success: true,
       tabId,
-      frameId,
+      ...result.target,
       engine: result.engine,
       result: result.output,
       truncated: result.truncated || undefined,
       redacted: result.redacted || undefined,
-      warnings: warnings?.length ? warnings : undefined,
       metrics: { elapsedMs: Math.round(performance.now() - startTime) },
     };
 
@@ -534,16 +597,13 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
     tabId: number,
     result: ExecutionFailure,
     startTime: number,
-    warnings?: string[],
-    frameId?: number,
   ): ToolResult {
     const payload: JavaScriptToolResult = {
       success: false,
       tabId,
-      frameId,
+      ...result.target,
       engine: result.engine,
       error: result.error,
-      warnings: warnings?.length ? warnings : undefined,
       metrics: { elapsedMs: Math.round(performance.now() - startTime) },
     };
 
@@ -552,6 +612,31 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
       isError: true,
     };
   }
+}
+
+/** One execution context per call; workers have no isolated worlds. */
+function validateTarget(args: JavaScriptToolParams): string | undefined {
+  const chosen = [
+    args.frameId !== undefined && 'frameId',
+    args.sessionId !== undefined && 'sessionId',
+    args.workerTargetId !== undefined && 'workerTargetId',
+  ].filter(Boolean);
+  if (chosen.length > 1) return `use only one of ${chosen.join(', ')}`;
+  if (args.frameId !== undefined && !(Number.isInteger(args.frameId) && args.frameId >= 0)) {
+    return 'frameId must be a non-negative integer frame ID from scan or chrome_list_frames';
+  }
+  if (args.world !== undefined && args.world !== 'MAIN' && args.world !== 'ISOLATED') {
+    return 'world must be MAIN or ISOLATED';
+  }
+  if (args.world === 'ISOLATED' && chosen.length === 1 && chosen[0] !== 'frameId') {
+    return 'world ISOLATED needs a frame; a child session or worker has only its main context';
+  }
+  for (const key of ['sessionId', 'workerTargetId'] as const) {
+    if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key])) {
+      return `${key} must be a non-empty string`;
+    }
+  }
+  return undefined;
 }
 
 export const javascriptTool = new JavaScriptTool();

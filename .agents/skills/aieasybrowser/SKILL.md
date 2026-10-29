@@ -40,7 +40,7 @@ Batch independent fields whose targets remain stable; stop to observe between st
 
 Postconditions support `element`, `text`, `url`, `title`, synchronous `javascript`, and `networkIdle`. For URL/title, use an explicit `value` and `match` (`contains`, `equals`, or `regex`), not an after-the-fact "changed" baseline. Prefer a site-specific postcondition for asynchronous actions; a successful click alone does not prove the intended effect.
 
-JavaScript conditions use the existing JS engine: CDP for the top frame (potential debugger notification), ISOLATED execution for an explicit nonzero frame ID. The current MV3 build rejects dynamic JS in that ISOLATED path with a CSP error; do not treat it as an unsatisfied condition or relax CSP. Use frame-scoped scan/query tools for DOM reads and explicit CDP contexts for iframe JavaScript. Execution errors fail immediately; when waiting for an absent object, return false rather than dereferencing null.
+JavaScript conditions run through `chrome_javascript` (CDP, potential debugger notification) in the frame's MAIN world; a cross-process frame needs this task's held CDP session (see below). Execution errors fail immediately; when waiting for an absent object, return false rather than dereferencing null.
 
 Use `wait '<condition-json>'` to wait and rescan without repeating an action. The overall deadline is `--timeout <ms>` (default 60000, maximum 120000). JSON arguments accept `@file` or `@-` for stdin, avoiding shell-quoting problems.
 
@@ -200,6 +200,20 @@ aieasybrowser --session re call chrome_cdp_session '{"action":"stop"}'
 - `status.targets` lists auto-attached cross-site iframes and workers; pass their `sessionId` to CDP commands. Same-site iframes are not separate targets.
 - A session belongs to the task that started it; other tasks get `CDP_SESSION_OWNED`. A second start returns `CDP_SESSION_ACTIVE`. Always `stop` when done: a held session keeps Chrome's debugging banner shown and domain state enabled.
 - `active:false` with `ended.reason` means Chrome detached it (banner cancelled, DevTools, crash); buffered events stay readable until `stop`. Extension reload loses the session; start again rather than assuming it survived.
+
+`chrome_javascript` (and `eval --frame <id>`) always runs over CDP; there is no scripting fallback, and it never runs in another frame than the one requested. Pick at most one context:
+
+```sh
+aieasybrowser --session re eval --frame 3 'return location.href'
+aieasybrowser --session re call chrome_javascript '{"frameId":3,"world":"ISOLATED","code":"globalThis.seen = (globalThis.seen || 0) + 1; return seen"}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"workers"}'
+aieasybrowser --session re call chrome_javascript '{"sessionId":"<sessions[].sessionId>","code":"return self.constructor.name"}'
+aieasybrowser --session re call chrome_javascript '{"workerTargetId":"<browserTargets[].workerTargetId>","code":"return self.constructor.name"}'
+```
+
+- `frameId` takes IDs from scan or `chrome_list_frames`. `world` defaults to MAIN (page globals); ISOLATED is AEB's own world in that frame, invisible to the page and persistent until the frame navigates. The CLI has no `--world`; use `call`.
+- A frame inside a cross-site iframe runs only through this task's held session on the tab: without one the call fails with `CDP_SESSION_NOT_STARTED`, another task's session gives `CDP_SESSION_OWNED`. `FRAME_CHANGED` means the frame navigated during the call; scan again. `FRAME_MAPPING_FAILED` covers frames whose owner element is in a shadow root; `FRAME_TARGET_NOT_ATTACHED` covers a cross-site iframe nested inside another (only one level auto-attaches).
+- `workers` lists `sessions` (dedicated workers, in-scope service workers; pass `sessionId`) and `browserTargets` (shared workers and other worker targets of the tab's origins; pass `workerTargetId`, attached only for that call). A failure with `error.kind: "debugger_conflict"` means DevTools or another extension holds the debugger.
 
 Inside a held session, `chrome_cdp_scripts` lists, reads, and searches page scripts (bundles, inline, eval, iframe/worker children). Its first call enables `Debugger` with pauses skipped, so `debugger;` statements do not stop the page:
 

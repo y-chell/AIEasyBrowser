@@ -680,7 +680,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.WAIT_FOR,
     description:
-      'Wait for a browser condition to become true. Prefer this over ad-hoc polling JS for common checks such as element visibility, text changes, URL/title changes, JS predicates, network requests, network idle, and downloads. Synchronous JavaScript predicates reuse the chrome_javascript execution engine (CDP by default; explicit nonzero frameId uses its ISOLATED frame execution) and may show Chrome debugger notifications.',
+      'Wait for a browser condition to become true. Prefer this over ad-hoc polling JS for common checks such as element visibility, text changes, URL/title changes, JS predicates, network requests, network idle, and downloads. Synchronous JavaScript predicates reuse chrome_javascript (CDP, the frame MAIN world; a cross-process frame needs the task held chrome_cdp_session) and may show Chrome debugger notifications.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1494,7 +1494,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.JAVASCRIPT,
     description:
-      'Execute JavaScript code in a browser tab and return the result. Uses CDP Runtime.evaluate with awaitPromise and returnByValue; automatically falls back to chrome.scripting.executeScript if the debugger is busy. DOM events created here are synthetic (event.isTrusted=false); if a site ignores them, use chrome_computer or CDP Input events. For cross-origin iframes, prefer Page.getFrameTree + Page.createIsolatedWorld via chrome_cdp_command/chrome_cdp_batch. Output is sanitized (sensitive data redacted) and truncated by default.',
+      'Execute JavaScript code in a browser tab and return the result. Always runs through CDP (awaitPromise, returnByValue), unaffected by the page CSP; there is no fallback, so a debugger held by DevTools or another extension fails with error.kind debugger_conflict. Choose at most one context: frameId (any frame from scan or chrome_list_frames, in world MAIN or ISOLATED), sessionId (a held child session: dedicated/service worker or OOPIF root), or workerTargetId (a shared worker from chrome_cdp_session workers). Frames in a cross-process (cross-site) iframe need an active chrome_cdp_session started by the same task on the tab; without one the call fails with CDP_SESSION_NOT_STARTED instead of running elsewhere. The result reports the frameId, world, cdpFrameId and sessionId it ran in. DOM events created here are synthetic (event.isTrusted=false); if a site ignores them, use chrome_computer or CDP Input events. Output is sanitized (sensitive data redacted) and truncated by default.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1514,7 +1514,23 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         frameId: {
           type: 'number',
           description:
-            'Target frame ID. When provided, execution uses chrome.scripting.executeScript in the frame isolated world.',
+            'Extension frame ID (0 = top frame) from scan or chrome_list_frames. Mapped to its CDP frame; unknown or unmappable frames fail (FRAME_NOT_FOUND, FRAME_MAPPING_FAILED).',
+        },
+        world: {
+          type: 'string',
+          enum: ['MAIN', 'ISOLATED'],
+          description:
+            'MAIN (default) is the page JavaScript context. ISOLATED is a separate AEB world in the frame that shares the DOM but not page globals; its globals persist until the frame navigates. Frames only.',
+        },
+        sessionId: {
+          type: 'string',
+          description:
+            'Child CDP session (worker, service_worker, or iframe root) from chrome_cdp_session status or workers. Requires an active chrome_cdp_session on this tab started by the same task.',
+        },
+        workerTargetId: {
+          type: 'string',
+          description:
+            'Browser-level worker target (shared worker) from chrome_cdp_session workers browserTargets; its URL origin must be loaded in the tab. Attached only for this call.',
         },
         timeoutMs: {
           type: 'number',
@@ -1650,14 +1666,14 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.CDP_SESSION,
     description:
-      'Hold a Chrome DevTools Protocol session on a tab across calls and buffer its events. start attaches, records the listed event domains/methods (for example "Runtime", "Network.requestWillBeSent", or "*"), and by default auto-attaches OOPIF iframes and workers as child sessions. While held, CDP domain state enabled with chrome_cdp_command/batch (Runtime.enable, Network.enable, Debugger.enable) persists between calls, and child targets can be addressed with their sessionId. events reads buffered events after a cursor with byte limits; missed/dropped report ring-buffer loss. stop detaches. One session per tab, owned by the starting task. State is lost on extension reload. A detach while the tab stays open (user cancels the debugging banner, renderer crash) ends the session but keeps buffered events readable until stop; closing the tab discards the session.',
+      'Hold a Chrome DevTools Protocol session on a tab across calls and buffer its events. start attaches, records the listed event domains/methods (for example "Runtime", "Network.requestWillBeSent", or "*"), and by default auto-attaches OOPIF iframes and workers as child sessions. While held, CDP domain state enabled with chrome_cdp_command/batch (Runtime.enable, Network.enable, Debugger.enable) persists between calls, and child targets can be addressed with their sessionId. events reads buffered events after a cursor with byte limits; missed/dropped report ring-buffer loss. workers lists worker child sessions (dedicated workers, service workers in scope; use sessionId) and browser-level worker targets of the tab origins that are not children of the page (shared workers; use workerTargetId with chrome_javascript). stop detaches. One session per tab, owned by the starting task. State is lost on extension reload. A detach while the tab stays open (user cancels the debugging banner, renderer crash) ends the session but keeps buffered events readable until stop; closing the tab discards the session.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['start', 'status', 'events', 'stop'],
-          description: 'start | status | events | stop.',
+          enum: ['start', 'status', 'events', 'workers', 'stop'],
+          description: 'start | status | events | workers | stop.',
         },
         tabId: {
           type: 'number',

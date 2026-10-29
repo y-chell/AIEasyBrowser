@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Frames fixture @@RUN_ID@@</title>
+  </head>
+  <body>
+    <p>Frame and worker execution contexts</p>
+    <iframe id="same" src="/frames-child?name=same" width="200" height="60"></iframe>
+    <iframe id="dup-a" src="/frames-child?name=dup" width="200" height="60"></iframe>
+    <iframe id="dup-b" src="/frames-child?name=dup" width="200" height="60"></iframe>
+    <iframe
+      id="cross"
+      src="@@CROSS_ORIGIN@@/frames-child?name=cross&nest=1"
+      width="300"
+      height="160"
+    ></iframe>
+    <script>
+      window.frameName = 'top';
+      window.runMarker = '@@RUN_ID@@';
+      // Page CSP forbids eval; CDP evaluation must still work without changing any CSP.
+      try {
+        eval('1');
+        window.pageEval = 'allowed';
+      } catch (error) {
+        window.pageEval = error.name;
+      }
+      const query = new URLSearchParams(location.search);
+      if (query.get('workers') === '1') {
+        window.dedicated = new Worker('/frames-worker.js?kind=dedicated');
+        window.shared = new SharedWorker('/frames-worker.js?kind=shared');
+        window.swReady = navigator.serviceWorker
+          .register('/frames-worker.js?kind=service')
+          .then(() => navigator.serviceWorker.ready)
+          .then(
+            () => 'ready',
+            (error) => 'failed: ' + error.message,
+          );
+      }
+    </script>
+  </body>
+</html>

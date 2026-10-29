@@ -11,6 +11,9 @@ const frameTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-frame.html'
 const scriptsTemplate = fs.readFileSync(path.join(__dirname, 'cli-scripts.html'), 'utf8');
 const debuggerTemplate = fs.readFileSync(path.join(__dirname, 'cli-debugger.html'), 'utf8');
 const debuggerApp = fs.readFileSync(path.join(__dirname, 'cli-debugger-app.js'), 'utf8');
+const framesTemplate = fs.readFileSync(path.join(__dirname, 'cli-frames.html'), 'utf8');
+const framesChild = fs.readFileSync(path.join(__dirname, 'cli-frames-child.html'), 'utf8');
+const framesWorker = fs.readFileSync(path.join(__dirname, 'cli-frames-worker.js'), 'utf8');
 
 // One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
 function scriptsBundle() {
@@ -41,6 +44,46 @@ const server = http.createServer((request, response) => {
       'Cache-Control': 'no-store',
     });
     response.end(debuggerApp.replaceAll('@@RUN_ID@@', runId));
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/frames-worker.js') {
+    response.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(framesWorker.replaceAll('@@RUN_ID@@', runId));
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/frames-child') {
+    const name = (url.searchParams.get('name') || '').replace(/[^a-z0-9-]/gi, '');
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(
+      framesChild
+        .replaceAll('@@NAME@@', name)
+        .replaceAll(
+          '@@NESTED@@',
+          url.searchParams.get('nest') === '1'
+            ? '<iframe id="nested" src="/frames-child?name=' + name + '-nested"></iframe>'
+            : '',
+        ),
+    );
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/frames') {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      // No 'unsafe-eval': evaluation through CDP must not depend on the page CSP.
+      'Content-Security-Policy': "script-src 'self' 'unsafe-inline'",
+    });
+    response.end(
+      framesTemplate
+        .replaceAll('@@RUN_ID@@', runId)
+        .replaceAll('@@CROSS_ORIGIN@@', 'http://localhost:' + server.address().port),
+    );
     return;
   }
   if (

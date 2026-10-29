@@ -15,11 +15,12 @@ import {
   stopSession,
   type HeldSession,
 } from '@/utils/cdp-event-hub';
+import { browserWorkerTargets } from '@/utils/cdp-frames';
 import { DEFAULT_MAX_OUTPUT_BYTES } from '@/utils/output-sanitizer';
 import { clampInt, serializeResult } from './cdp';
 
 interface CdpSessionParams {
-  action?: 'start' | 'status' | 'events' | 'stop';
+  action?: 'start' | 'status' | 'events' | 'workers' | 'stop';
   tabId?: number;
   windowId?: number;
   events?: string[];
@@ -110,6 +111,11 @@ class CdpSessionTool extends BaseBrowserToolExecutor {
             ...base,
             ...this.readEvents(getOwnedSession(tab.id, owner), args),
           });
+        case 'workers':
+          return createStructuredToolResult({
+            ...base,
+            ...(await this.listWorkers(getOwnedSession(tab.id, owner))),
+          });
         case 'stop': {
           const errors = await stopSession(tab.id, owner);
           if (errors.length) {
@@ -118,13 +124,37 @@ class CdpSessionTool extends BaseBrowserToolExecutor {
           return createStructuredToolResult({ ...base, stopped: true });
         }
         default:
-          throw new Error('action must be start, status, events, or stop');
+          throw new Error('action must be start, status, events, workers, or stop');
       }
     } catch (error) {
       return createErrorResponse(
         `Error in CDP session: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  /**
+   * Workers of the tab: auto-attached child sessions (dedicated workers, service workers in scope)
+   * and browser-level worker targets of the tab's origins that are not children of the page.
+   * Chrome reports both shared and service workers there as type "worker".
+   */
+  private async listWorkers(session: HeldSession) {
+    if (session.ended) {
+      throw new Error(
+        `CDP_SESSION_ENDED: tab ${session.tabId} debugger session ended (${session.ended.reason})`,
+      );
+    }
+    const children = [...session.targets.values()].filter((target) => target.type !== 'iframe');
+    const childIds = new Set(children.map((target) => target.targetId));
+    const browserTargets = (await browserWorkerTargets(session.tabId))
+      .filter((target) => !childIds.has(target.id))
+      .map((target) => ({
+        workerTargetId: target.id,
+        url: target.url,
+        // Attached by another debugger client (DevTools) or a call in progress.
+        attached: target.attached,
+      }));
+    return { sessions: children, browserTargets };
   }
 
   private readEvents(session: HeldSession, args: CdpSessionParams) {

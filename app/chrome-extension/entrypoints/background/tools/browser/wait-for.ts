@@ -396,13 +396,17 @@ return !!value;
       pollIntervalMs,
       async () => {
         throwIfAborted(executionContext?.signal);
-        const executed = await javascriptTool.execute({
-          tabId: tab.id!,
-          frameId: args.frameId,
-          code,
-          timeoutMs: Math.max(1, timeoutMs),
-          maxOutputBytes: 1024,
-        });
+        // The task owner lets a predicate in a cross-process frame use the task's held session.
+        const executed = await javascriptTool.execute(
+          {
+            tabId: tab.id!,
+            frameId: args.frameId,
+            code,
+            timeoutMs: Math.max(1, timeoutMs),
+            maxOutputBytes: 1024,
+          },
+          executionContext,
+        );
         throwIfAborted(executionContext?.signal);
         const payload = parseJsonResult(executed);
         if (executed.isError || payload?.success !== true) {
