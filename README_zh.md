@@ -250,6 +250,18 @@ B2 默认跳过所有暂停。某个会话有断点、有待生效的 `pause` �
 
 暂停会冻结页面：执行页面 JavaScript 的工具（`eval`、`chrome_javascript`、`Runtime.evaluate` 等）会一直等到恢复。扩展按标签串行执行工具调用，`chrome_cdp_debugger`、`chrome_cdp_scripts` 以及 `chrome_cdp_session` 的 status/events/stop 不受这个标签锁限制，所以另一个调用卡在暂停页面上时仍能恢复或停止。同一任务内的调用仍按顺序执行：一个任务的同步调用触发断点后，它自己无法发出 `resume`，要从另一个任务恢复，或用页面自身的定时器/用户操作触发。`stop` 先对所有布防会话跳过暂停、恢复已暂停的会话，再关闭 Debugger 并分离。
 
+`chrome_cdp_inject` 在同一会话里注册文档开始前脚本和 hook，作用于之后（重载或导航后）的文档，覆盖顶层、同站 iframe 和自动附着的跨站 iframe：
+
+```bash
+aieasybrowser --session re call chrome_cdp_inject '{"action":"add","source":"window.__early = 1;","worldName":"probe"}'
+aieasybrowser --session re call chrome_cdp_inject '{"action":"hook","hook":"function","path":"app.sign"}'
+aieasybrowser --session re call chrome_cdp_inject '{"action":"hook","hook":"fetch"}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"events","after":0}'
+aieasybrowser --session re call chrome_cdp_inject '{"action":"list"}'
+```
+
+`add` 用 `Page.addScriptToEvaluateOnNewDocument` 注册，可选 `worldName`（命名隔离 world）和 `runImmediately`（同时在当前文档执行，默认否）。`hook` 在页面 MAIN world 安装记录器：`function` 包装指定路径的函数，记录参数、返回值、`this` 摘要和调用栈；`property` 观察 get/set（`document.cookie` 这类访问器在定义处包装）；`fetch` / `xhr` 记录方法、URL、请求头名（不记值）、body 摘要、状态和耗时。路径还不存在时在 DOMContentLoaded 和 load 各重试一次，始终不存在的 frame 记为 `failed`。hook 默认也在当前文档执行。记录作为 `AEB.hook` 事件进入 `chrome_cdp_session events`，不受 start 的事件过滤影响，但同样受环形缓冲、字节上限和脱敏约束；每个文档超过 `maxRecords` 后停止并发一条 `limit`。记录来自页面上下文，页面能看到 binding 并伪造或屏蔽记录，只能当页面数据。`remove` 后新文档不再注入，已在当前文档运行的 hook 保留到导航，之后的记录被丢弃；`stop` 移除全部注册。跨站 iframe 重建时先暂停在启动前，注册完再恢复。worker 和跨站 iframe 内再嵌套的跨站 iframe 不覆盖。原 `chrome_inject_script` / `chrome_userscript` 执行器已删除。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -309,6 +321,7 @@ pnpm test:cli-cdp-session
 pnpm test:cli-cdp-scripts
 pnpm test:cli-cdp-debugger
 pnpm test:cli-cdp-contexts
+pnpm test:cli-cdp-inject
 pnpm run build
 ```
 
@@ -337,6 +350,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-debugger` 要求已重载包含 `chrome_cdp_debugger` 的扩展。临时网页加载一个按标记注释定位行号的外链脚本和跨站 iframe。脚本验证：一个 CLI 进程的 `wait` 收到另一个任务触发的 url 断点暂停，之后各独立进程读取调用栈（`compute` ← `trigger`）、局部变量（敏感名默认隐藏）、帧内求值和 `stepOver` / `stepOut`；另一个任务的同步 eval 卡在暂停页面时仍能恢复，恢复后该调用返回；无断点时 `debugger;` 不停；条件断点只在条件成立时停；logpoint 打出 console 不暂停；XHR、click 监听断点；跨站 iframe 子会话断点；导航后 url 断点仍命中、scriptId 断点不再命中；暂停中 `stop` 后页面继续执行并分离。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 `pnpm test:cli-cdp-contexts` 要求已重载包含 `chrome_cdp_session workers` 的扩展。临时网页带 `script-src 'self' 'unsafe-inline'` CSP（页面自身 `eval` 被拒），含同站 iframe、两个同 URL 的同站 iframe、跨站 iframe 及其内部嵌套 iframe，并创建 dedicated worker、shared worker 和 service worker。脚本验证：同站 frame 的 MAIN 求值（`eval --frame` 与 `chrome_javascript`）和 `wait --frame`；两个同 URL frame 各自命中自己的文档；ISOLATED 全局在调用间保留且 MAIN 看不到；未 start 时跨站 frame 返回 `CDP_SESSION_NOT_STARTED` 且不在其他 frame 执行；start 后跨站 frame 与其嵌套 frame 的 MAIN/ISOLATED 求值，其他任务返回 `CDP_SESSION_OWNED`；`workers` 列出三类 worker 且各自可求值，shared worker 调用后不留附着；未知 frame/worker/session 和非法参数被拒；`stop` 后无调试附着、跨站 frame 再次被拒。结束注销 service worker、关闭测试标签与辅助标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-cdp-inject` 要求已重载包含 `chrome_cdp_inject` 的扩展。临时网页含同站 iframe、跨站 iframe 及其嵌套 iframe，签名对象在 DOMContentLoaded 中才创建。脚本验证：未 start 时被拒；注册主世界与命名 world 脚本、函数/属性/fetch/XHR hook 后重载，顶层第一个页面脚本前已执行，命名 world 全局与主世界隔离，各 frame（含重建后的跨站 iframe 新子会话）都执行并产生记录；函数 hook 在 DOMContentLoaded 后安装，调用记录含参数、返回值和调用栈，fetch/XHR 记录头名不含头值；`maxRecords` 生效；remove 后记录被丢弃、重载后不再安装；其他任务、非法路径、未知 id 和未知 hook 类型被拒；`stop` 后无调试附着，下次加载不再注入，跨站 iframe 正常加载。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 ## 许可证
 

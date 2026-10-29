@@ -34,6 +34,7 @@ const FAST_TOOLS = new Set([
   'chrome_bookmark_delete',
   'chrome_cdp_session',
   'chrome_cdp_debugger',
+  'chrome_cdp_inject',
 ]);
 
 const MEDIUM_TOOLS = new Set(['chrome_navigate', 'chrome_screenshot']);

@@ -13,6 +13,12 @@ import {
   trackDebugEvent,
   type DebugState,
 } from '@/utils/cdp-debugger';
+import {
+  clearInjectState,
+  createInjectState,
+  trackInjectEvent,
+  type InjectState,
+} from '@/utils/cdp-inject';
 
 /**
  * Long-lived debugger sessions owned by one named CLI task.
@@ -62,6 +68,7 @@ export interface HeldSession {
   targets: Map<string, ChildTarget>;
   scripts: ScriptTable;
   debug: DebugState;
+  inject: InjectState;
   ended?: { at: number; reason: string };
 }
 
@@ -133,6 +140,13 @@ function handleEvent(source: chrome.debugger.DebuggerSession, method: string, pa
   // The script table is maintained regardless of the event filter.
   trackScriptEvent(session, method, params, source.sessionId);
   trackDebugEvent(session, method, params, source.sessionId);
+  // Hook records are buffered whatever the filter; the raw binding call never is.
+  const hook = trackInjectEvent(session, method, params, source.sessionId);
+  if (hook === 'consumed') return;
+  if (hook) {
+    pushEvent(session, hook.method, hook.params, source.sessionId);
+    return;
+  }
   if (matchesFilter(session.filters, method)) {
     pushEvent(session, method, params, source.sessionId);
   }
@@ -156,6 +170,7 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string) {
   session.targets.clear();
   clearScripts(session.scripts);
   clearDebugState(session.debug);
+  clearInjectState(session.inject);
   pruneEnded();
 }
 
@@ -236,6 +251,7 @@ export async function startSession(
     targets: new Map(),
     scripts: createScriptTable(),
     debug: createDebugState(),
+    inject: createInjectState(),
   };
   // Register before auto-attach: Target.attachedToTarget arrives before the command resolves.
   sessions.set(tabId, session);
@@ -285,6 +301,8 @@ export async function stopSession(tabId: number, owner: string): Promise<string[
     } catch (error) {
       errors.push(`detach: ${error instanceof Error ? error.message : error}`);
     }
+    // Detach removed the registrations and the binding in Chrome.
+    clearInjectState(session.inject);
   }
   sessions.delete(tabId);
   return errors;

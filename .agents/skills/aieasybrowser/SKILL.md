@@ -244,6 +244,20 @@ aieasybrowser --session re call chrome_cdp_debugger '{"action":"resume"}'
 - `wait` with `after` = the previous pause `seq` waits for a newer pause; `timedOut:true` is a normal result. `logMessage` makes a logpoint (needs `Runtime.enable` and `Runtime.consoleAPICalled` events to read it). `xhrUrl` and `eventName` cover fetch/XHR and DOM listeners.
 - url breakpoints survive reloads; scriptId breakpoints bind to one script instance. Breakpoints in a child `sessionId` (OOPIF/worker) apply there only. objectIds expire on resume. `stop` resumes and disables everything.
 
+`chrome_cdp_inject` registers document-start scripts and hooks in the same held session. They apply to later documents (reload or navigate) in the top frame, same-site iframes, and auto-attached cross-site iframes:
+
+```bash
+aieasybrowser --session re call chrome_cdp_inject '{"action":"add","source":"window.__early = 1;","worldName":"probe"}'
+aieasybrowser --session re call chrome_cdp_inject '{"action":"hook","hook":"function","path":"app.sign"}'
+aieasybrowser --session re call chrome_cdp_inject '{"action":"hook","hook":"fetch"}'
+aieasybrowser --session re call chrome_cdp_session '{"action":"events","after":0}'
+aieasybrowser --session re call chrome_cdp_inject '{"action":"list"}'
+```
+
+- Hook records come back from `events` as method `AEB.hook`, whatever the start filter. They hold `hookId`, `type` (`installed`/`call`/`get`/`set`/`fetch`/`xhr`/`limit`/`failed`), and argument/result previews or request method, url, header names (never values), body preview, and status. A path that does not exist yet is retried at DOMContentLoaded and load. Frames where it never appears show up as `failed` and in `list` failures.
+- Hooks run in the page main world, so the page can see and forge them. Treat records as page data. `add` defaults to later documents only; hooks also run in the current documents unless `runImmediately:false`.
+- `remove` stops later records. A hook already running in a loaded document stays until it navigates. `stop` removes everything. Workers and frames nested inside a cross-site iframe are not covered.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.

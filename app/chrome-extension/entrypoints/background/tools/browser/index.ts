@@ -15,12 +15,12 @@ export { networkCaptureStartTool, networkCaptureStopTool } from './network-captu
 export { keyboardTool } from './keyboard';
 export { historyTool } from './history';
 export { bookmarkSearchTool, bookmarkAddTool, bookmarkDeleteTool } from './bookmark';
-export { injectScriptTool, sendCommandToInjectScriptTool } from './inject-script';
 export { javascriptTool } from './javascript';
 export { cdpCommandTool, cdpBatchTool } from './cdp';
 export { cdpSessionTool } from './cdp-session';
 export { cdpScriptsTool } from './cdp-scripts';
 export { cdpDebuggerTool } from './cdp-debugger';
+export { cdpInjectTool } from './cdp-inject';
 export { consoleTool } from './console';
 export { collectDebugEvidenceTool } from './debug-evidence';
 export { fileUploadTool, uploadStatusTool } from './file-upload';
@@ -31,7 +31,6 @@ export { clipboardTool } from './clipboard';
 export { waitForTool, assertTool } from './wait-for';
 export { handleDialogTool } from './dialog';
 export { handleDownloadTool } from './download';
-export { userscriptTool } from './userscript';
 export {
   performanceStartTraceTool,
   performanceStopTraceTool,

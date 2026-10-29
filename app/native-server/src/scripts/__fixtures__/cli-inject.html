@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Inject fixture</title>
+    <script>
+      // The first page script: a document-start injection must already have run here.
+      window.sawEarly = typeof window.__aebEarly;
+    </script>
+  </head>
+  <body>
+    <p>Document-start injection and hooks</p>
+    <iframe id="same" src="/frames-child?name=same" width="200" height="60"></iframe>
+    <iframe
+      id="cross"
+      src="@@CROSS_ORIGIN@@/frames-child?name=cross&nest=1"
+      width="300"
+      height="160"
+    ></iframe>
+    <script>
+      window.frameName = 'top';
+      document.title = 'Inject fixture @@RUN_ID@@';
+      // The signer appears only after parsing, like an app bundle that runs on DOMContentLoaded.
+      document.addEventListener('DOMContentLoaded', () => {
+        window.app = {
+          sign(input) {
+            return 'sig:' + input;
+          },
+        };
+      });
+      window.callApi = async (value) => {
+        const response = await fetch('/inject-api?via=fetch', {
+          method: 'POST',
+          headers: { 'X-Sign': window.app.sign(value), Authorization: 'Bearer hidden-@@RUN_ID@@' },
+          body: JSON.stringify({ value }),
+        });
+        const xhrStatus = await new Promise((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('GET', '/inject-api?via=xhr');
+          xhr.setRequestHeader('X-Token', 'hidden-@@RUN_ID@@');
+          xhr.onloadend = () => resolve(xhr.status);
+          xhr.send();
+        });
+        return [response.status, xhrStatus];
+      };
+    </script>
+  </body>
+</html>

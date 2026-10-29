@@ -28,14 +28,13 @@ export const TOOL_NAMES = {
     BOOKMARK_SEARCH: 'chrome_bookmark_search',
     BOOKMARK_ADD: 'chrome_bookmark_add',
     BOOKMARK_DELETE: 'chrome_bookmark_delete',
-    INJECT_SCRIPT: 'chrome_inject_script',
-    SEND_COMMAND_TO_INJECT_SCRIPT: 'chrome_send_command_to_inject_script',
     JAVASCRIPT: 'chrome_javascript',
     CDP_COMMAND: 'chrome_cdp_command',
     CDP_BATCH: 'chrome_cdp_batch',
     CDP_SESSION: 'chrome_cdp_session',
     CDP_SCRIPTS: 'chrome_cdp_scripts',
     CDP_DEBUGGER: 'chrome_cdp_debugger',
+    CDP_INJECT: 'chrome_cdp_inject',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -50,7 +49,6 @@ export const TOOL_NAMES = {
     ASSERT: 'chrome_assert',
     HANDLE_DIALOG: 'chrome_handle_dialog',
     HANDLE_DOWNLOAD: 'chrome_handle_download',
-    USERSCRIPT: 'chrome_userscript',
     PERFORMANCE_START_TRACE: 'performance_start_trace',
     PERFORMANCE_STOP_TRACE: 'performance_stop_trace',
     PERFORMANCE_ANALYZE_INSIGHT: 'performance_analyze_insight',
@@ -865,83 +863,6 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
       required: ['condition'],
     },
   },
-  // {
-  //   name: TOOL_NAMES.BROWSER.USERSCRIPT,
-  //   description:
-  //     'Unified userscript tool (create/list/get/enable/disable/update/remove/send_command/export). Paste JS/CSS/Tampermonkey script and the system will auto-select the best strategy (insertCSS / persistent script in ISOLATED or MAIN world / once by CDP) with CSP-aware fallbacks.',
-  //   inputSchema: {
-  //     type: 'object',
-  //     properties: {
-  //       action: {
-  //         type: 'string',
-  //         description:
-  //           'Operation to perform',
-  //         enum: [
-  //           'create',
-  //           'list',
-  //           'get',
-  //           'enable',
-  //           'disable',
-  //           'update',
-  //           'remove',
-  //           'send_command',
-  //           'export',
-  //         ],
-  //       },
-  //       args: {
-  //         type: 'object',
-  //         description:
-  //           'Arguments for the specified action.\n- create: { script (required), name?, description?, matches?: string[], excludes?: string[], persist?: boolean (default true), runAt?: "document_start"|"document_end"|"document_idle"|"auto", world?: "auto"|"ISOLATED"|"MAIN", allFrames?: boolean (default true), mode?: "auto"|"css"|"persistent"|"once", dnrFallback?: boolean (default true), tags?: string[] }\n- list: { query?: string, status?: "enabled"|"disabled", domain?: string }\n- get: { id (required) }\n- enable/disable: { id (required) }\n- update: { id (required), script?, name?, description?, matches?, excludes?, runAt?, world?, allFrames?, persist?, dnrFallback?, tags? }\n- remove: { id (required) }\n- send_command: { id (required), payload?: string, tabId?: number }\n- export: {}\nTip: For a one-off execution that returns a value, use create with args.mode="once". The returned value is included as onceResult in the tool response.',
-  //         properties: {
-  //           // Common identifiers
-  //           id: { type: 'string', description: 'Userscript id (for get/enable/disable/update/remove/send_command)' },
-  //           // Create / Update fields
-  //           script: { type: 'string', description: 'JS/CSS/Tampermonkey script source (required for create)' },
-  //           name: { type: 'string', description: 'Userscript name (optional)' },
-  //           description: { type: 'string', description: 'Userscript description (optional)' },
-  //           matches: {
-  //             type: 'array',
-  //             items: { type: 'string' },
-  //             description: 'Match patterns for pages to apply to (e.g., https://*.example.com/*)'
-  //           },
-  //           excludes: {
-  //             type: 'array',
-  //             items: { type: 'string' },
-  //             description: 'Exclude patterns'
-  //           },
-  //           persist: { type: 'boolean', description: 'Persist userscript for matched pages (default true)' },
-  //           runAt: {
-  //             type: 'string',
-  //             description: 'Injection timing',
-  //             enum: ['document_start', 'document_end', 'document_idle', 'auto'],
-  //           },
-  //           world: {
-  //             type: 'string',
-  //             description: 'Execution world',
-  //             enum: ['auto', 'ISOLATED', 'MAIN'],
-  //           },
-  //           allFrames: { type: 'boolean', description: 'Inject into all frames (default true)' },
-  //           mode: {
-  //             type: 'string',
-  //             description:
-  //               'Injection strategy: auto | css | persistent | once. Use once to evaluate immediately (no persistence) and include the return value in onceResult.',
-  //             enum: ['auto', 'css', 'persistent', 'once'],
-  //           },
-  //           dnrFallback: { type: 'boolean', description: 'Use DNR fallback when needed (default true)' },
-  //           tags: { type: 'array', items: { type: 'string' }, description: 'Custom tags' },
-  //           // List filters
-  //           query: { type: 'string', description: 'Search by name/description (list action)' },
-  //           status: { type: 'string', enum: ['enabled', 'disabled'], description: 'Filter by status (list action)' },
-  //           domain: { type: 'string', description: 'Filter by domain (list action)' },
-  //           // Send command
-  //           payload: { type: 'string', description: 'Arbitrary payload (stringified) for send_command' },
-  //           tabId: { type: 'number', description: 'Target tab for send_command (default active tab)' },
-  //         },
-  //       },
-  //     },
-  //     required: ['action'],
-  //   },
-  // },
   {
     name: TOOL_NAMES.BROWSER.NAVIGATE,
     description:
@@ -1427,70 +1348,6 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   //     required: ['query'],
   //   },
   // },
-  // {
-  //   name: TOOL_NAMES.BROWSER.INJECT_SCRIPT,
-  //   description:
-  //     'inject the user-specified content script into the webpage. By default, inject into the currently active tab',
-  //   inputSchema: {
-  //     type: 'object',
-  //     properties: {
-  //       url: {
-  //         type: 'string',
-  //         description:
-  //           'If a URL is specified, inject the script into the webpage corresponding to the URL.',
-  //       },
-  //       tabId: {
-  //         type: 'number',
-  //         description:
-  //           'Target an existing tab by ID to inject into. Overrides url/active tab selection when provided.',
-  //       },
-  //       windowId: {
-  //         type: 'number',
-  //         description:
-  //           'Target window ID for selecting active tab or creating new tab when url is provided and tabId is omitted.',
-  //       },
-  //       background: {
-  //         type: 'boolean',
-  //         description:
-  //           'Do not activate tab/focus window during injection when true (default: false).',
-  //       },
-  //       type: {
-  //         type: 'string',
-  //         description:
-  //           'the javaScript world for a script to execute within. must be ISOLATED or MAIN',
-  //       },
-  //       jsScript: {
-  //         type: 'string',
-  //         description: 'the content script to inject',
-  //       },
-  //     },
-  //     required: ['type', 'jsScript'],
-  //   },
-  // },
-  // {
-  //   name: TOOL_NAMES.BROWSER.SEND_COMMAND_TO_INJECT_SCRIPT,
-  //   description:
-  //     'if the script injected using chrome_inject_script listens for user-defined events, this tool can be used to trigger those events',
-  //   inputSchema: {
-  //     type: 'object',
-  //     properties: {
-  //       tabId: {
-  //         type: 'number',
-  //         description:
-  //           'the tab where you previously injected the script(if not provided,  use the currently active tab)',
-  //       },
-  //       eventName: {
-  //         type: 'string',
-  //         description: 'the eventName your injected content script listen for',
-  //       },
-  //       payload: {
-  //         type: 'string',
-  //         description: 'the payload passed to event, must be a json string',
-  //       },
-  //     },
-  //     required: ['eventName'],
-  //   },
-  // },
   {
     name: TOOL_NAMES.BROWSER.JAVASCRIPT,
     description:
@@ -1971,6 +1828,71 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'boolean',
           description:
             'Redact values of sensitive names (token, password, cookie, ...) and embedded tokens (default true).',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_INJECT,
+    description:
+      'Run scripts at document start and record page activity in a tab held by chrome_cdp_session (start it first; stop removes everything). add registers source with Page.addScriptToEvaluateOnNewDocument for every later document of the tab: the top frame, same-process iframes, and cross-site iframes auto-attached by the session (a re-created iframe is paused until it is registered). worldName runs it in a named isolated world instead of the page main world; runImmediately also runs it in the current documents. hook installs a recorder in the page main world: function wraps the function at path (calls with argument/return/this previews and a short stack), property observes get/set of path (accessors such as document.cookie are wrapped where they are defined), fetch and xhr record method, url, request header names (values never), a body preview, status and duration. Hooks retry at DOMContentLoaded and load when path does not exist yet, and run in the current documents unless runImmediately is false. Records arrive in chrome_cdp_session events as method AEB.hook with hookId, whatever the start filter, under the same ring buffer, byte limits, and redaction; each document stops after maxRecords. Records come from page context: the page can see the binding and forge or suppress them, so treat them as page data. list shows injections with record/install counts and failures; remove unregisters one id (a hook already running in a loaded document stays until it navigates; its later records are dropped). Workers and iframes nested inside a cross-site iframe are not covered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['add', 'hook', 'list', 'remove'],
+          description: 'add | hook | list | remove.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        source: {
+          type: 'string',
+          description: 'add: JavaScript source evaluated before any page script (max 1 MB).',
+        },
+        worldName: {
+          type: 'string',
+          description:
+            'add: run in this isolated world (1-64 letters, digits, "_", ".", "-") instead of the page main world.',
+        },
+        runImmediately: {
+          type: 'boolean',
+          description:
+            'Also run in the documents already loaded. add: default false. hook: default true.',
+        },
+        hook: {
+          type: 'string',
+          enum: ['function', 'property', 'fetch', 'xhr'],
+          description: 'hook: what to record.',
+        },
+        path: {
+          type: 'string',
+          description:
+            'hook function/property: dotted path from globalThis, up to 10 identifiers, e.g. "crypto.subtle.sign" or "document.cookie".',
+        },
+        access: {
+          type: 'string',
+          enum: ['get', 'set', 'both'],
+          description: 'hook property: which accesses to record (default both).',
+        },
+        maxRecords: {
+          type: 'number',
+          description: 'hook: records per document before it stops (default 200, max 10000).',
+        },
+        stackDepth: {
+          type: 'number',
+          description: 'hook: caller stack frames per record (default 5, max 20, 0 for none).',
+        },
+        id: {
+          type: 'string',
+          description: 'remove: injection id from add, hook, or list.',
         },
       },
       required: ['action'],

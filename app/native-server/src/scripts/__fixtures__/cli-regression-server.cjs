@@ -14,6 +14,7 @@ const debuggerApp = fs.readFileSync(path.join(__dirname, 'cli-debugger-app.js'),
 const framesTemplate = fs.readFileSync(path.join(__dirname, 'cli-frames.html'), 'utf8');
 const framesChild = fs.readFileSync(path.join(__dirname, 'cli-frames-child.html'), 'utf8');
 const framesWorker = fs.readFileSync(path.join(__dirname, 'cli-frames-worker.js'), 'utf8');
+const injectTemplate = fs.readFileSync(path.join(__dirname, 'cli-inject.html'), 'utf8');
 
 // One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
 function scriptsBundle() {
@@ -69,6 +70,28 @@ const server = http.createServer((request, response) => {
             ? '<iframe id="nested" src="/frames-child?name=' + name + '-nested"></iframe>'
             : '',
         ),
+    );
+    return;
+  }
+  if (url.pathname === '/inject-api' && ['GET', 'POST'].includes(request.method)) {
+    response.writeHead(request.method === 'POST' ? 201 : 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    });
+    response.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/inject') {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      // Document-start injection goes through CDP and must not need 'unsafe-eval'.
+      'Content-Security-Policy': "script-src 'self' 'unsafe-inline'",
+    });
+    response.end(
+      injectTemplate
+        .replaceAll('@@RUN_ID@@', runId)
+        .replaceAll('@@CROSS_ORIGIN@@', 'http://localhost:' + server.address().port),
     );
     return;
   }
