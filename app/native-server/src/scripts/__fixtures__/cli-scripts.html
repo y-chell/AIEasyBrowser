@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scripts fixture @@RUN_ID@@</title>
+  </head>
+  <body>
+    <p>Script table fixture</p>
+    <script src="/scripts-bundle.js?run=@@RUN_ID@@"></script>
+    <script>
+      window.inlineMarker = 'inline-@@RUN_ID@@';
+      function pauseProbe() {
+        debugger;
+        return 'not-paused';
+      }
+    </script>
+    <script>
+      eval("window.evalMarker = 'eval-@@RUN_ID@@'");
+    </script>
+    <iframe id="cross" src="@@FRAME_URL@@" width="240" height="80"></iframe>
+  </body>
+</html>

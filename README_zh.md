@@ -223,6 +223,16 @@ aieasybrowser --session re call chrome_cdp_session '{"action":"stop"}'
 
 会话归启动它的命名任务所有，其他任务访问返回 `CDP_SESSION_OWNED`。会话期间 Chrome 会持续显示调试提示条。用户取消提示条、DevTools 接管或页面崩溃会使会话结束（`active:false` 和 `ended.reason`），已缓冲事件在 `stop` 前仍可读；关闭标签直接丢弃会话。扩展重载或 Native Host 退出后状态丢失，需要重新 `start`。用完必须 `stop`，`session --forget` 不会释放 Chrome 中的调试会话。
 
+持有会话期间，`chrome_cdp_scripts` 列出、读取和搜索页面脚本（外链 bundle、内联、eval，以及 iframe/worker 子会话中的脚本）：
+
+```powershell
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"list","url":"bundle"}'
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"search","query":"signature","maxMatches":20}'
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"source","scriptId":"42","offset":180000,"length":4000}'
+```
+
+首次调用会在页面和已附着子会话上启用 `Debugger` 并跳过所有暂停，页面里的 `debugger;` 不会停住；`stop` 时关闭 Debugger。脚本表按 `scriptParsed` 维护，主 frame 导航清空该会话的旧脚本，子 target 分离时移除其脚本，最多保留 5000 条（`dropped` 计溢出）。搜索在扩展内用 JS 正则逐脚本匹配，命中给出相对资源的 0 基 `line`/`column`（内联脚本含其在 HTML 中的起始偏移）、脚本内 `offset` 和前后片段；`source` 按 `offset`/`length` 或 `line`/`lineCount` 读取，受 `maxOutputBytes`（UTF-8 字节）限制，用 `endOffset` 续读，不一次返回整个 bundle。isolated（扩展内容脚本）默认不列出，`includeIsolated:true` 才包含。源码与片段默认脱敏，`sanitizeOutput:false` 返回原值。V8 已回收的脚本返回 `SCRIPT_GONE`，wasm 返回 `SCRIPT_NOT_TEXT`。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -246,7 +256,7 @@ codex mcp remove aieasybrowser
 
 ## 连接检查与诊断
 
-运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 39。
+运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 41。
 
 安装或启动异常时，在源码根目录执行诊断命令：
 
@@ -279,6 +289,7 @@ pnpm test
 pnpm test:cli-regression
 pnpm test:cli-long-task
 pnpm test:cli-cdp-session
+pnpm test:cli-cdp-scripts
 pnpm run build
 ```
 
@@ -301,6 +312,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 ### 持续 CDP 会话验收
 
 `pnpm test:cli-cdp-session` 要求 Chrome 中已重载包含 `chrome_cdp_session` 的扩展。它在本机临时网页（含跨站 iframe）上用多个独立 CLI 进程验证：会话跨进程保持并缓冲另一进程触发的 console 事件；跨站 iframe 与新建的 dedicated worker 作为子会话可求值；未知 sessionId、其他任务访问和重复 start 被拒绝；`stop` 后该标签不再有调试附着；关闭标签后没有残留 debug target。脚本会打开一个本扩展的 `offscreen.html` 辅助标签读取 `chrome.debugger.getTargets()`，结束时与测试标签一起关闭，并忘记测试任务、退出临时服务。
+
+`pnpm test:cli-cdp-scripts` 同样要求已重载包含 `chrome_cdp_scripts` 的扩展。临时网页含一个约 23 万字符、单行的外链 bundle（带 sourceMappingURL 和中文）、两段内联脚本、一段 eval 和跨站 iframe。脚本验证：未 start 时拒绝且不附着；bundle 分页读取后与服务端文件逐字相同、每页不超过字节上限；同一 runId 在 bundle、内联、eval 中的命中坐标与在源文件中算出的位置一致，游标逐条翻页结果与一次搜索相同；页面的 `debugger;` 不暂停；新建 worker 的脚本可搜到；未知 scriptId、非法参数、其他任务访问被拒绝；导航后旧脚本被清除；`stop` 后无调试附着。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 ## 许可证
 

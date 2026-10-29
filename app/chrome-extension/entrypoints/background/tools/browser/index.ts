@@ -19,6 +19,7 @@ export { injectScriptTool, sendCommandToInjectScriptTool } from './inject-script
 export { javascriptTool } from './javascript';
 export { cdpCommandTool, cdpBatchTool } from './cdp';
 export { cdpSessionTool } from './cdp-session';
+export { cdpScriptsTool } from './cdp-scripts';
 export { consoleTool } from './console';
 export { collectDebugEvidenceTool } from './debug-evidence';
 export { fileUploadTool, uploadStatusTool } from './file-upload';

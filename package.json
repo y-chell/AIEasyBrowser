@@ -36,6 +36,7 @@
     "test:cli-regression": "pnpm --filter aieasybrowser-bridge run test:cli-regression",
     "test:cli-long-task": "pnpm --filter aieasybrowser-bridge run test:cli-long-task",
     "test:cli-cdp-session": "pnpm --filter aieasybrowser-bridge run test:cli-cdp-session",
+    "test:cli-cdp-scripts": "pnpm --filter aieasybrowser-bridge run test:cli-cdp-scripts",
     "prepare": "husky"
   },
   "devDependencies": {

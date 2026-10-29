@@ -1,4 +1,11 @@
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import {
+  clearScripts,
+  createScriptTable,
+  disableScriptDebugger,
+  trackScriptEvent,
+  type ScriptTable,
+} from '@/utils/cdp-scripts';
 
 /**
  * Long-lived debugger sessions owned by one named CLI task.
@@ -46,6 +53,7 @@ export interface HeldSession {
   nextSeq: number;
   dropped: number;
   targets: Map<string, ChildTarget>;
+  scripts: ScriptTable;
   ended?: { at: number; reason: string };
 }
 
@@ -114,6 +122,8 @@ function handleEvent(source: chrome.debugger.DebuggerSession, method: string, pa
   } else if (method === 'Target.detachedFromTarget' && params?.sessionId) {
     session.targets.delete(params.sessionId);
   }
+  // The script table is maintained regardless of the event filter.
+  trackScriptEvent(session, method, params, source.sessionId);
   if (matchesFilter(session.filters, method)) {
     pushEvent(session, method, params, source.sessionId);
   }
@@ -135,6 +145,7 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string) {
   // Keep buffered events readable: the last events before a crash or close are often the point.
   session.ended = { at: Date.now(), reason };
   session.targets.clear();
+  clearScripts(session.scripts);
   pruneEnded();
 }
 
@@ -210,6 +221,7 @@ export async function startSession(
     nextSeq: 1,
     dropped: 0,
     targets: new Map(),
+    scripts: createScriptTable(),
   };
   // Register before auto-attach: Target.attachedToTarget arrives before the command resolves.
   sessions.set(tabId, session);
@@ -236,6 +248,11 @@ export async function stopSession(tabId: number, owner: string): Promise<string[
   if (!session.ended) {
     // Mark ended first so the detach event of our own stop is not reported as unexpected.
     session.ended = { at: Date.now(), reason: 'stopped' };
+    try {
+      await disableScriptDebugger(session);
+    } catch (error) {
+      errors.push(`disable debugger: ${error instanceof Error ? error.message : error}`);
+    }
     if (session.autoAttach) {
       try {
         await cdpSessionManager.sendCommand(tabId, 'Target.setAutoAttach', {

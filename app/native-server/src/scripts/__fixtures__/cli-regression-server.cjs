@@ -8,13 +8,35 @@ const runId = process.argv[2];
 const template = fs.readFileSync(path.join(__dirname, 'cli-regression.html'), 'utf8');
 const longTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-task.html'), 'utf8');
 const frameTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-frame.html'), 'utf8');
+const scriptsTemplate = fs.readFileSync(path.join(__dirname, 'cli-scripts.html'), 'utf8');
+
+// One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
+function scriptsBundle() {
+  const parts = [];
+  for (let index = 0; index < 6000; index += 1) {
+    parts.push('function m' + index + '(a){return a*' + index + '+"汉字' + (index % 10) + '"}');
+  }
+  parts.push('window.bundleMarker="bundle-' + runId + '"');
+  return parts.join(';') + '\n//# sourceMappingURL=scripts-bundle.js.map\n';
+}
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || '/', 'http://127.0.0.1');
   if (url.pathname === '/favicon.ico') {
     response.writeHead(204).end();
     return;
   }
-  if (request.method !== 'GET' || !['/', '/long', '/long-frame'].includes(url.pathname)) {
+  if (request.method === 'GET' && url.pathname === '/scripts-bundle.js') {
+    response.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(scriptsBundle());
+    return;
+  }
+  if (
+    request.method !== 'GET' ||
+    !['/', '/long', '/long-frame', '/scripts'].includes(url.pathname)
+  ) {
     if (request.method === 'GET' && url.pathname === '/signal') {
       const name = url.searchParams.get('name');
       if (!['timeout-start', 'timeout-end', 'disconnect-start', 'disconnect-end'].includes(name)) {
@@ -43,7 +65,9 @@ const server = http.createServer((request, response) => {
       ? longTemplate
       : url.pathname === '/long-frame'
         ? frameTemplate
-        : template
+        : url.pathname === '/scripts'
+          ? scriptsTemplate
+          : template
     )
       .replaceAll('@@TAG@@', escapeHtml(tag))
       .replaceAll('@@RUN_ID@@', escapeHtml(runId))

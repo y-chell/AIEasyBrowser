@@ -34,6 +34,7 @@ export const TOOL_NAMES = {
     CDP_COMMAND: 'chrome_cdp_command',
     CDP_BATCH: 'chrome_cdp_batch',
     CDP_SESSION: 'chrome_cdp_session',
+    CDP_SCRIPTS: 'chrome_cdp_scripts',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -1697,6 +1698,113 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'boolean',
           description:
             'events: redact cookies/tokens/password-like data (default true). Set false only when raw values are required.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_SCRIPTS,
+    description:
+      'List, read, and search JavaScript loaded in a tab held by chrome_cdp_session (start it first). The first call enables the Debugger domain on the tab and its child sessions with skipAllPauses (existing `debugger;` statements do not freeze the page) and Chrome replays every live script. The table tracks scripts from Debugger.scriptParsed: kind external | inline | eval (no url) | sourceURL, target page | iframe | worker, and drops scripts of navigated frames. Lines/columns are 0-based and resource-relative like CDP locations (an inline script starts at its startLine inside the HTML), so search hits work as Debugger.setBreakpointByUrl locations. offset/length count UTF-16 code units like scriptParsed length. source returns one slice (never a whole large bundle by default); continue with offset=endOffset while hasMore. search scans each script locally and returns scriptId:line:column, offset, and a snippet; continue with cursor. Scripts in a child session need its sessionId. Output redacts embedded tokens by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'source', 'search'],
+          description: 'list | source | search.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        scriptId: {
+          type: 'string',
+          description: 'source: required. list/search: restrict to this script.',
+        },
+        sessionId: {
+          type: 'string',
+          description:
+            'Child session (OOPIF or worker) owning the script, from list or chrome_cdp_session status. Omit for the root page session. list/search: restrict to this session; "" selects the root session only.',
+        },
+        url: {
+          type: 'string',
+          description: 'list/search: case-insensitive substring of the script url.',
+        },
+        kind: {
+          type: 'string',
+          enum: ['external', 'inline', 'eval', 'sourceURL'],
+          description: 'list/search: restrict to one script kind.',
+        },
+        includeIsolated: {
+          type: 'boolean',
+          description:
+            'list/search: include isolated-world scripts (extension content scripts). Default false.',
+        },
+        after: {
+          type: 'number',
+          description: 'list: return scripts with seq greater than this cursor (default 0).',
+        },
+        limit: {
+          type: 'number',
+          description: 'list: maximum scripts per page (default 100, max 1000).',
+        },
+        offset: {
+          type: 'number',
+          description: 'source: start offset in UTF-16 code units (default 0).',
+        },
+        length: {
+          type: 'number',
+          description: 'source: code units to read from offset (default 20000).',
+        },
+        line: {
+          type: 'number',
+          description:
+            'source: first resource-relative line to read, instead of offset. Must be within startLine..endLine of the script.',
+        },
+        lineCount: {
+          type: 'number',
+          description: 'source: number of lines to read from line (default 200).',
+        },
+        query: {
+          type: 'string',
+          description: 'search: text to find, or a JavaScript regular expression with isRegex.',
+        },
+        isRegex: {
+          type: 'boolean',
+          description: 'search: treat query as a JavaScript regular expression (default false).',
+        },
+        caseSensitive: {
+          type: 'boolean',
+          description: 'search: case-sensitive matching (default false).',
+        },
+        maxMatches: {
+          type: 'number',
+          description: 'search: maximum matches per page (default 50, max 500).',
+        },
+        contextChars: {
+          type: 'number',
+          description:
+            'search: characters of context before and after each match (default 80, max 500).',
+        },
+        cursor: {
+          type: 'string',
+          description: 'search: resume after a previous page, using its cursor value.',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description:
+            'Maximum UTF-8 bytes of source text, or of list/search entries, per call (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact embedded tokens, JWTs, and long base64/hex strings in source text and snippets (default true). Offsets always refer to the raw source.',
         },
       },
       required: ['action'],

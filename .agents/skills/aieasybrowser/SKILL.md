@@ -201,6 +201,19 @@ aieasybrowser --session re call chrome_cdp_session '{"action":"stop"}'
 - A session belongs to the task that started it; other tasks get `CDP_SESSION_OWNED`. A second start returns `CDP_SESSION_ACTIVE`. Always `stop` when done: a held session keeps Chrome's debugging banner shown and domain state enabled.
 - `active:false` with `ended.reason` means Chrome detached it (banner cancelled, DevTools, crash); buffered events stay readable until `stop`. Extension reload loses the session; start again rather than assuming it survived.
 
+Inside a held session, `chrome_cdp_scripts` lists, reads, and searches page scripts (bundles, inline, eval, iframe/worker children). Its first call enables `Debugger` with pauses skipped, so `debugger;` statements do not stop the page:
+
+```sh
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"list","url":"bundle"}'
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"search","query":"signature","maxMatches":20}'
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"source","scriptId":"42","offset":180000,"length":4000}'
+aieasybrowser --session re call chrome_cdp_scripts '{"action":"source","scriptId":"13","line":10,"lineCount":5}'
+```
+
+- Search hits give 0-based `line`/`column` relative to the resource (inline scripts include their HTML offset) plus `offset` inside the script; read around a hit with `source` `offset`. Minified bundles are one line, so never read them by line.
+- Page with `after`/`nextAfter` (list), `cursor` (search), and `endOffset` (source). `sessionId` filters a child target; `""` means the page only. Content-script (isolated) scripts are hidden unless `includeIsolated:true`.
+- Source and snippets are redacted by default; pass `sanitizeOutput:false` only when the raw value is needed. `SCRIPT_GONE` means V8 dropped the script; main-frame navigation clears the table.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.

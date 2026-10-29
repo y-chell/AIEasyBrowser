@@ -96,19 +96,7 @@ export function sanitizeAndLimitOutput(
  * 参考 mcp-tools.js 的脱敏逻辑，增加 Base64/Hex/cookie-query 识别
  */
 export function sanitizeText(text: string): { text: string; redacted: boolean } {
-  let out = text;
-  let redacted = false;
-
-  const replace = (
-    re: RegExp,
-    replacement: string | ((substring: string, ...args: string[]) => string),
-  ) => {
-    const next = out.replace(re, replacement as Parameters<typeof String.prototype.replace>[1]);
-    if (next !== out) {
-      out = next;
-      redacted = true;
-    }
-  };
+  const out = text;
 
   // 1. 整体字符串检测（mcp-tools.js 风格）
   // Cookie/query string 形态检测（包含 = 和 ; 或 &）
@@ -132,6 +120,28 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
   if (/^[a-f0-9]{32,}$/i.test(out)) {
     return { text: '[BLOCKED: Hex credential]', redacted: true };
   }
+
+  return redactInlineSecrets(out);
+}
+
+/**
+ * 只替换文本中内嵌的凭据片段，不做整串拦截。
+ * 源码几乎总含 `=` 与 `&`/`;`，整串的 cookie/query 判定会把整段代码替换掉，所以源码输出只走这一步。
+ */
+export function redactInlineSecrets(text: string): { text: string; redacted: boolean } {
+  let out = text;
+  let redacted = false;
+
+  const replace = (
+    re: RegExp,
+    replacement: string | ((substring: string, ...args: string[]) => string),
+  ) => {
+    const next = out.replace(re, replacement as Parameters<typeof String.prototype.replace>[1]);
+    if (next !== out) {
+      out = next;
+      redacted = true;
+    }
+  };
 
   // 2. Bearer token
   replace(/\bBearer\s+([A-Za-z0-9._~+/=-]+)\b/gi, 'Bearer <redacted>');
