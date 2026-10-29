@@ -233,6 +233,21 @@ aieasybrowser --session re call chrome_cdp_scripts '{"action":"source","scriptId
 
 首次调用会在页面和已附着子会话上启用 `Debugger` 并跳过所有暂停，页面里的 `debugger;` 不会停住；`stop` 时关闭 Debugger。脚本表按 `scriptParsed` 维护，主 frame 导航清空该会话的旧脚本，子 target 分离时移除其脚本，最多保留 5000 条（`dropped` 计溢出）。搜索在扩展内用 JS 正则逐脚本匹配，命中给出相对资源的 0 基 `line`/`column`（内联脚本含其在 HTML 中的起始偏移）、脚本内 `offset` 和前后片段；`source` 按 `offset`/`length` 或 `line`/`lineCount` 读取，受 `maxOutputBytes`（UTF-8 字节）限制，用 `endOffset` 续读，不一次返回整个 bundle。isolated（扩展内容脚本）默认不列出，`includeIsolated:true` 才包含。源码与片段默认脱敏，`sanitizeOutput:false` 返回原值。V8 已回收的脚本返回 `SCRIPT_GONE`，wasm 返回 `SCRIPT_NOT_TEXT`。
 
+`chrome_cdp_debugger` 在同一会话里设断点、等待暂停、单步并读取调用栈和变量：
+
+```powershell
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"setBreakpoint","url":"https://site/app.js","line":0,"column":18342}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"wait","timeoutMs":30000}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"properties","scopeIndex":0,"depth":1}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"resume"}'
+```
+
+断点有四种：`url` / `urlRegex`（页面重载后仍生效）或 `scriptId`（只绑定该脚本实例）加 0 基行列，可带 `condition`，或用 `logMessage` 做 logpoint（只打 console 不暂停，读取需 `Runtime.enable` 并在 start 时订阅 `Runtime.consoleAPICalled`）；`xhrUrl`（URL 子串，`""` 为全部请求）；`eventName`（DOM 事件监听）。子会话 `sessionId` 上设的断点只作用于该 iframe/worker。
+
+B2 默认跳过所有暂停。某个会话有断点、有待生效的 `pause` 或正处于暂停时才"布防"（关闭 skipAllPauses），此时该会话里的 `debugger;` 语句也会停；最后一个断点移除且恢复后撤防；单步跑完没有再停时会话仍布防，未暂停时调用 `resume` 会撤防没有断点的会话并取消待生效的 `pause`。`status` 列出暂停（调用栈、scope、命中断点）、断点及命中次数、布防的会话；`chrome_cdp_session status` 的 `paused` 也会显示。`wait` 返回 `seq` 大于 `after` 的第一个暂停，超时返回 `timedOut:true`。`stepOver` / `stepInto` / `stepOut` / `continueToLocation` 返回下一个暂停，否则 `running:true`。`evaluate` 在暂停帧中求值，`properties` 按 `frameIndex`+`scopeIndex` 或 `objectId` 列出属性，`depth` 展开嵌套对象，总数受 `maxProperties` 限制；objectId 在恢复后失效。变量名含 token/password/cookie 等时默认隐藏值。`blackbox` 设置单步时跳过的脚本 URL 正则。
+
+暂停会冻结页面：执行页面 JavaScript 的工具（`eval`、`chrome_javascript`、`Runtime.evaluate` 等）会一直等到恢复。扩展按标签串行执行工具调用，`chrome_cdp_debugger`、`chrome_cdp_scripts` 以及 `chrome_cdp_session` 的 status/events/stop 不受这个标签锁限制，所以另一个调用卡在暂停页面上时仍能恢复或停止。同一任务内的调用仍按顺序执行：一个任务的同步调用触发断点后，它自己无法发出 `resume`，要从另一个任务恢复，或用页面自身的定时器/用户操作触发。`stop` 先对所有布防会话跳过暂停、恢复已暂停的会话，再关闭 Debugger 并分离。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -256,7 +271,7 @@ codex mcp remove aieasybrowser
 
 ## 连接检查与诊断
 
-运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 41。
+运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 42。
 
 安装或启动异常时，在源码根目录执行诊断命令：
 
@@ -290,6 +305,7 @@ pnpm test:cli-regression
 pnpm test:cli-long-task
 pnpm test:cli-cdp-session
 pnpm test:cli-cdp-scripts
+pnpm test:cli-cdp-debugger
 pnpm run build
 ```
 
@@ -314,6 +330,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-session` 要求 Chrome 中已重载包含 `chrome_cdp_session` 的扩展。它在本机临时网页（含跨站 iframe）上用多个独立 CLI 进程验证：会话跨进程保持并缓冲另一进程触发的 console 事件；跨站 iframe 与新建的 dedicated worker 作为子会话可求值；未知 sessionId、其他任务访问和重复 start 被拒绝；`stop` 后该标签不再有调试附着；关闭标签后没有残留 debug target。脚本会打开一个本扩展的 `offscreen.html` 辅助标签读取 `chrome.debugger.getTargets()`，结束时与测试标签一起关闭，并忘记测试任务、退出临时服务。
 
 `pnpm test:cli-cdp-scripts` 同样要求已重载包含 `chrome_cdp_scripts` 的扩展。临时网页含一个约 23 万字符、单行的外链 bundle（带 sourceMappingURL 和中文）、两段内联脚本、一段 eval 和跨站 iframe。脚本验证：未 start 时拒绝且不附着；bundle 分页读取后与服务端文件逐字相同、每页不超过字节上限；同一 runId 在 bundle、内联、eval 中的命中坐标与在源文件中算出的位置一致，游标逐条翻页结果与一次搜索相同；页面的 `debugger;` 不暂停；新建 worker 的脚本可搜到；未知 scriptId、非法参数、其他任务访问被拒绝；导航后旧脚本被清除；`stop` 后无调试附着。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-cdp-debugger` 要求已重载包含 `chrome_cdp_debugger` 的扩展。临时网页加载一个按标记注释定位行号的外链脚本和跨站 iframe。脚本验证：一个 CLI 进程的 `wait` 收到另一个任务触发的 url 断点暂停，之后各独立进程读取调用栈（`compute` ← `trigger`）、局部变量（敏感名默认隐藏）、帧内求值和 `stepOver` / `stepOut`；另一个任务的同步 eval 卡在暂停页面时仍能恢复，恢复后该调用返回；无断点时 `debugger;` 不停；条件断点只在条件成立时停；logpoint 打出 console 不暂停；XHR、click 监听断点；跨站 iframe 子会话断点；导航后 url 断点仍命中、scriptId 断点不再命中；暂停中 `stop` 后页面继续执行并分离。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 ## 许可证
 

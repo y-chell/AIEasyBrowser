@@ -48,11 +48,22 @@ function describeSession(session: HeldSession) {
     lastSeq: last ? last.seq : session.nextSeq - 1,
     dropped: session.dropped,
     targets: [...session.targets.values()],
+    // Paused JavaScript freezes the page; chrome_cdp_debugger status has the frames.
+    paused: [...session.debug.pauses.values()].map((pause) => ({
+      ...(pause.key ? { sessionId: pause.key } : {}),
+      reason: pause.reason,
+      seq: pause.seq,
+    })),
   };
 }
 
 class CdpSessionTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.CDP_SESSION;
+
+  // status/events/stop must reach a session whose page is paused; start attaches and keeps the lock.
+  skipsTargetLock(args: CdpSessionParams) {
+    return args?.action !== 'start';
+  }
 
   async execute(
     args: CdpSessionParams,

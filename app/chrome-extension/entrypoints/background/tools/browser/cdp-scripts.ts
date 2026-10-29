@@ -122,6 +122,11 @@ function selectScripts(session: HeldSession, args: CdpScriptsParams): ScriptReco
 class CdpScriptsTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.CDP_SCRIPTS;
 
+  // Reading source at a pause must not wait for a call stuck on the paused page.
+  skipsTargetLock() {
+    return true;
+  }
+
   async execute(
     args: CdpScriptsParams,
     executionContext?: BrowserToolExecutionContext,

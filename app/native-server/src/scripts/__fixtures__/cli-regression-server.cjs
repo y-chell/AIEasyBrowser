@@ -9,6 +9,8 @@ const template = fs.readFileSync(path.join(__dirname, 'cli-regression.html'), 'u
 const longTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-task.html'), 'utf8');
 const frameTemplate = fs.readFileSync(path.join(__dirname, 'cli-long-frame.html'), 'utf8');
 const scriptsTemplate = fs.readFileSync(path.join(__dirname, 'cli-scripts.html'), 'utf8');
+const debuggerTemplate = fs.readFileSync(path.join(__dirname, 'cli-debugger.html'), 'utf8');
+const debuggerApp = fs.readFileSync(path.join(__dirname, 'cli-debugger-app.js'), 'utf8');
 
 // One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
 function scriptsBundle() {
@@ -33,9 +35,17 @@ const server = http.createServer((request, response) => {
     response.end(scriptsBundle());
     return;
   }
+  if (request.method === 'GET' && url.pathname === '/debugger-app.js') {
+    response.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(debuggerApp.replaceAll('@@RUN_ID@@', runId));
+    return;
+  }
   if (
     request.method !== 'GET' ||
-    !['/', '/long', '/long-frame', '/scripts'].includes(url.pathname)
+    !['/', '/long', '/long-frame', '/scripts', '/debugger'].includes(url.pathname)
   ) {
     if (request.method === 'GET' && url.pathname === '/signal') {
       const name = url.searchParams.get('name');
@@ -67,7 +77,9 @@ const server = http.createServer((request, response) => {
         ? frameTemplate
         : url.pathname === '/scripts'
           ? scriptsTemplate
-          : template
+          : url.pathname === '/debugger'
+            ? debuggerTemplate
+            : template
     )
       .replaceAll('@@TAG@@', escapeHtml(tag))
       .replaceAll('@@RUN_ID@@', escapeHtml(runId))

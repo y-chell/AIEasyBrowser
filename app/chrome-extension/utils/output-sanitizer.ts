@@ -266,7 +266,7 @@ function sanitizeValue(
   return { value: walk(value, maxDepth), redacted };
 }
 
-function isSensitiveKey(key: string): boolean {
+export function isSensitiveKey(key: string): boolean {
   const normalized = normalizeKey(key);
   return SENSITIVE_KEY_MARKERS.some((marker) => normalized.includes(marker));
 }

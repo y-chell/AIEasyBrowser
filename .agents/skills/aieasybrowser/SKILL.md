@@ -214,6 +214,22 @@ aieasybrowser --session re call chrome_cdp_scripts '{"action":"source","scriptId
 - Page with `after`/`nextAfter` (list), `cursor` (search), and `endOffset` (source). `sessionId` filters a child target; `""` means the page only. Content-script (isolated) scripts are hidden unless `includeIsolated:true`.
 - Source and snippets are redacted by default; pass `sanitizeOutput:false` only when the raw value is needed. `SCRIPT_GONE` means V8 dropped the script; main-frame navigation clears the table.
 
+`chrome_cdp_debugger` sets breakpoints and inspects pauses in the same held session. Use search hits as locations:
+
+```sh
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"setBreakpoint","url":"https://site/app.js","line":0,"column":18342,"condition":"n > 1"}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"wait","timeoutMs":30000}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"properties","scopeIndex":0,"depth":1}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"evaluate","expression":"JSON.stringify(payload)"}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"stepOver"}'
+aieasybrowser --session re call chrome_cdp_debugger '{"action":"resume"}'
+```
+
+- A paused page is frozen: any tool that runs page JavaScript waits until `resume`. Trigger the code from the page itself (user action, timer) or another task, never with a synchronous call in the task that must resume. `chrome_cdp_debugger`, `chrome_cdp_scripts`, and `chrome_cdp_session` status/events/stop still work while another call is stuck.
+- A session pauses only while it has a breakpoint or a requested `pause`; then `debugger;` statements there pause too. Removing the last breakpoint and resuming disarms it; if a step ran to completion and `status.armed` still lists a session without breakpoints, `resume` disarms it.
+- `wait` with `after` = the previous pause `seq` waits for a newer pause; `timedOut:true` is a normal result. `logMessage` makes a logpoint (needs `Runtime.enable` and `Runtime.consoleAPICalled` events to read it). `xhrUrl` and `eventName` cover fetch/XHR and DOM listeners.
+- url breakpoints survive reloads; scriptId breakpoints bind to one script instance. Breakpoints in a child `sessionId` (OOPIF/worker) apply there only. objectIds expire on resume. `stop` resumes and disables everything.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.

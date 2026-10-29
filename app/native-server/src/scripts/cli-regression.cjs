@@ -865,6 +865,7 @@ if (require.main === module) {
 
 module.exports = {
   runCli,
+  startCli,
   assertOk,
   assertFailure,
   pageElements,

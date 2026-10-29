@@ -10,6 +10,8 @@ import {
 type ToolExecutor = {
   name: string;
   execute: (args: any, context?: BrowserToolExecutionContext) => Promise<any>;
+  /** True for calls that only touch a held debugger session and must not wait for the tab lock. */
+  skipsTargetLock?: (args: any) => boolean;
 };
 
 function isToolExecutor(value: unknown): value is ToolExecutor {
@@ -66,6 +68,7 @@ export const handleCallTool = async (param: ToolCallParam) => {
       param.context,
       (args, executionContext) => tool.execute(args, executionContext),
       param.executionContext,
+      { targetLock: !tool.skipsTargetLock?.(param.args) },
     );
   } catch (error) {
     console.error(`Tool execution failed for ${param.name}:`, error);

@@ -6,6 +6,13 @@ import {
   trackScriptEvent,
   type ScriptTable,
 } from '@/utils/cdp-scripts';
+import {
+  clearDebugState,
+  createDebugState,
+  releaseDebugger,
+  trackDebugEvent,
+  type DebugState,
+} from '@/utils/cdp-debugger';
 
 /**
  * Long-lived debugger sessions owned by one named CLI task.
@@ -54,6 +61,7 @@ export interface HeldSession {
   dropped: number;
   targets: Map<string, ChildTarget>;
   scripts: ScriptTable;
+  debug: DebugState;
   ended?: { at: number; reason: string };
 }
 
@@ -124,6 +132,7 @@ function handleEvent(source: chrome.debugger.DebuggerSession, method: string, pa
   }
   // The script table is maintained regardless of the event filter.
   trackScriptEvent(session, method, params, source.sessionId);
+  trackDebugEvent(session, method, params, source.sessionId);
   if (matchesFilter(session.filters, method)) {
     pushEvent(session, method, params, source.sessionId);
   }
@@ -146,12 +155,16 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string) {
   session.ended = { at: Date.now(), reason };
   session.targets.clear();
   clearScripts(session.scripts);
+  clearDebugState(session.debug);
   pruneEnded();
 }
 
 // A closed tab cannot be addressed by later calls (the bridge rejects it first), so its
 // buffered events are unreachable; drop them instead of keeping an unreadable tombstone.
 function handleTabRemoved(tabId: number) {
+  const session = sessions.get(tabId);
+  // A pending wait returns CDP_SESSION_ENDED instead of running into its timeout.
+  if (session) clearDebugState(session.debug);
   sessions.delete(tabId);
 }
 
@@ -222,6 +235,7 @@ export async function startSession(
     dropped: 0,
     targets: new Map(),
     scripts: createScriptTable(),
+    debug: createDebugState(),
   };
   // Register before auto-attach: Target.attachedToTarget arrives before the command resolves.
   sessions.set(tabId, session);
@@ -248,6 +262,8 @@ export async function stopSession(tabId: number, owner: string): Promise<string[
   if (!session.ended) {
     // Mark ended first so the detach event of our own stop is not reported as unexpected.
     session.ended = { at: Date.now(), reason: 'stopped' };
+    // Resume before Debugger.disable so a paused page is never left frozen.
+    errors.push(...(await releaseDebugger(session)));
     try {
       await disableScriptDebugger(session);
     } catch (error) {

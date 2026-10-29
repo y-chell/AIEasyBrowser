@@ -53,6 +53,33 @@ describe('task cancellation and target ownership', () => {
     expect(chrome.tabs.query).not.toHaveBeenCalled();
   });
 
+  test('targetLock false skips the tab lock but keeps the task queue', async () => {
+    const stuck = deferred<ReturnType<typeof result>>();
+    const stuckExecute = vi.fn(() => stuck.promise);
+    const first = runBrowserToolCallWithIsolation({ tabId: 7 }, context('B'), stuckExecute);
+    await vi.waitFor(() => expect(stuckExecute).toHaveBeenCalledOnce());
+    const control = vi.fn(async () => result(7));
+    await runBrowserToolCallWithIsolation({ tabId: 7 }, context(), control, undefined, {
+      targetLock: false,
+    });
+    expect(control).toHaveBeenCalledOnce();
+    const sameTask = vi.fn(async () => result(7));
+    const queued = runBrowserToolCallWithIsolation(
+      { tabId: 7 },
+      context('B'),
+      sameTask,
+      undefined,
+      {
+        targetLock: false,
+      },
+    );
+    await Promise.resolve();
+    expect(sameTask).not.toHaveBeenCalled();
+    stuck.resolve(result(7));
+    await Promise.all([first, queued]);
+    expect(sameTask).toHaveBeenCalledOnce();
+  });
+
   test('keeps normally running calls serial within a task', async () => {
     const slow = deferred<ReturnType<typeof result>>();
     const firstExecute = vi.fn(() => slow.promise);

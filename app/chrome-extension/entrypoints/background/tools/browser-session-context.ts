@@ -119,6 +119,7 @@ export async function runBrowserToolCallWithIsolation(
   context: BrowserToolCallContext | undefined,
   execute: (args: any, executionContext?: BrowserToolExecutionContext) => Promise<ToolResult>,
   executionContext?: BrowserToolExecutionContext,
+  options: { targetLock?: boolean } = {},
 ): Promise<ToolResult> {
   const signal = executionContext?.signal;
   const sessionId = typeof context?.sessionId === 'string' ? context.sessionId.trim() : undefined;
@@ -126,7 +127,8 @@ export async function runBrowserToolCallWithIsolation(
   const args = isPlainObject(rawArgs) ? { ...rawArgs } : {};
   const run = () =>
     withQueues(
-      getTargetQueueKeys(args),
+      // Debugger control must reach a tab whose lock is held by a call stuck on a paused page.
+      options.targetLock === false ? [] : getTargetQueueKeys(args),
       async () => {
         throwIfAborted(signal);
         if (context?.transport === 'cli' && typeof args.tabId === 'number') {

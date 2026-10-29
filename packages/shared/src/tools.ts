@@ -35,6 +35,7 @@ export const TOOL_NAMES = {
     CDP_BATCH: 'chrome_cdp_batch',
     CDP_SESSION: 'chrome_cdp_session',
     CDP_SCRIPTS: 'chrome_cdp_scripts',
+    CDP_DEBUGGER: 'chrome_cdp_debugger',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -1805,6 +1806,155 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'boolean',
           description:
             'Redact embedded tokens, JWTs, and long base64/hex strings in source text and snippets (default true). Offsets always refer to the raw source.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_DEBUGGER,
+    description:
+      'JavaScript debugger for a tab held by chrome_cdp_session (start it first; shares the Debugger domain of chrome_cdp_scripts). Pausing freezes the page: other tools that run page JavaScript wait until resume. A session (page or child sessionId) only pauses while it is "armed": it has a breakpoint, a requested pause, or a current pause; otherwise skipAllPauses stays on and `debugger;` statements are ignored. While armed, `debugger;` statements in that session also pause. setBreakpoint: url/urlRegex (survives reloads) or scriptId (this script only) with a 0-based resource-relative line (use chrome_cdp_scripts search locations), optional condition, or logMessage (logpoint: console.log(logMessage) without pausing; read it with Runtime.enable and Runtime.consoleAPICalled events); or xhrUrl (substring, "" = every request) or eventName (DOM event listener). wait blocks until a pause with seq > after (any session unless sessionId). status lists pauses with frames and scopes, breakpoints with hit counts, and armed sessions. resume/step*/continueToLocation/evaluate/properties act on the paused session (pass sessionId when several are paused); steps return the next pause or running:true; resume while not paused cancels a pending pause and disarms a session without breakpoints. properties lists a scope (frameIndex+scopeIndex) or objectId, depth expands nested objects. objectIds are valid only until resume. stop of chrome_cdp_session resumes and disables everything. Breakpoints in a child session apply to that session only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: [
+            'status',
+            'wait',
+            'pause',
+            'resume',
+            'stepOver',
+            'stepInto',
+            'stepOut',
+            'continueToLocation',
+            'setBreakpoint',
+            'removeBreakpoint',
+            'evaluate',
+            'properties',
+            'blackbox',
+          ],
+          description: 'Debugger action.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        sessionId: {
+          type: 'string',
+          description:
+            'Child session (OOPIF or worker) from chrome_cdp_session status; "" or omitted = the page. wait without sessionId waits for any session; resume/step/evaluate/properties without it use the only paused session.',
+        },
+        url: {
+          type: 'string',
+          description: 'setBreakpoint: exact script URL.',
+        },
+        urlRegex: {
+          type: 'string',
+          description: 'setBreakpoint: regular expression for script URLs.',
+        },
+        scriptId: {
+          type: 'string',
+          description:
+            'setBreakpoint: script from chrome_cdp_scripts (only this script instance). continueToLocation: target script.',
+        },
+        line: {
+          type: 'number',
+          description:
+            'setBreakpoint/continueToLocation: 0-based resource-relative line (inline scripts count from the top of the HTML).',
+        },
+        column: {
+          type: 'number',
+          description:
+            'setBreakpoint/continueToLocation: 0-based column (one-line bundles need it).',
+        },
+        condition: {
+          type: 'string',
+          description: 'setBreakpoint: JavaScript expression; pauses only when truthy.',
+        },
+        logMessage: {
+          type: 'string',
+          description:
+            'setBreakpoint: console.log arguments as JavaScript, e.g. "\'sig\', s"; logs instead of pausing (combined with condition when both are given).',
+        },
+        xhrUrl: {
+          type: 'string',
+          description:
+            'setBreakpoint: pause when an XHR/fetch URL contains this text ("" for every request). Page and iframe sessions only.',
+        },
+        eventName: {
+          type: 'string',
+          description: 'setBreakpoint: DOM event name such as "click"; pauses in its listeners.',
+        },
+        targetName: {
+          type: 'string',
+          description: 'setBreakpoint with eventName: EventTarget interface name, e.g. "Window".',
+        },
+        breakpointId: {
+          type: 'string',
+          description: 'removeBreakpoint: id from setBreakpoint or status (with its sessionId).',
+        },
+        after: {
+          type: 'number',
+          description: 'wait: return the first pause with seq greater than this (default 0).',
+        },
+        timeoutMs: {
+          type: 'number',
+          description:
+            'wait: maximum wait (default 10000, max 60000). pause/step*: wait for the resulting pause (default 3000).',
+        },
+        frameIndex: {
+          type: 'number',
+          description: 'evaluate/properties: call frame index from the pause (default 0, top).',
+        },
+        scopeIndex: {
+          type: 'number',
+          description: 'properties: scope index in the frame (from pause frames[].scopes).',
+        },
+        objectId: {
+          type: 'string',
+          description: 'properties: RemoteObject id from a scope, property, or evaluate result.',
+        },
+        expression: {
+          type: 'string',
+          description: 'evaluate: JavaScript evaluated in the paused call frame (sees its locals).',
+        },
+        returnByValue: {
+          type: 'boolean',
+          description: 'evaluate: return a JSON value instead of a RemoteObject (default false).',
+        },
+        depth: {
+          type: 'number',
+          description: 'properties: nested object levels to expand (default 0, max 3).',
+        },
+        maxProperties: {
+          type: 'number',
+          description: 'properties: total properties across all levels (default 100, max 1000).',
+        },
+        maxFrames: {
+          type: 'number',
+          description: 'Call frames per pause in the output (default 20, max 200).',
+        },
+        patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'blackbox: script URL regular expressions to skip while stepping; replaces the previous list, [] clears.',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description:
+            'Maximum UTF-8 bytes of the result; frame/property lists are trimmed first (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact values of sensitive names (token, password, cookie, ...) and embedded tokens (default true).',
         },
       },
       required: ['action'],

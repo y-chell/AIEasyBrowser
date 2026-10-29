@@ -33,6 +33,7 @@ const FAST_TOOLS = new Set([
   'chrome_bookmark_add',
   'chrome_bookmark_delete',
   'chrome_cdp_session',
+  'chrome_cdp_debugger',
 ]);
 
 const MEDIUM_TOOLS = new Set(['chrome_navigate', 'chrome_screenshot']);
