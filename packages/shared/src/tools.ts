@@ -1895,14 +1895,28 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.CDP_NETWORK,
     description:
-      'Request table of a tab held by chrome_cdp_session (start it first; its stop ends everything). start enables the Network domain on the tab and on every cross-site iframe and worker the session auto-attaches (a re-created iframe is paused until it is enabled), and records every request from then on, whatever the session event filter: method, url, type, status, timing, initiator with stack, the renderer headers and the wire headers (Cookie, Set-Cookie), redirects as linked rows, WebSocket frames, and EventSource messages. Bodies are read when a request finishes, because Chrome drops them once the document navigates: bodies="api" (default) keeps Document/XHR/Fetch/Other responses, "all" also scripts, styles, images, and fonts, "none" none; request bodies are kept whenever the page sends one. Each body keeps up to maxBodyBytes and all bodies share 32 MB (oldest evicted first); a body that was not kept is read from Chrome on demand while it still exists. list pages rows by seq (filter by url substring, method, types, status, state, sessionId); get returns one row in full with headers, auth (names of credential headers and cookies, never values), body previews, and timings; body pages the full request or response body (text by chars, binary as base64 by bytes); messages pages WebSocket/EventSource messages; har writes a HAR 1.2 file of the filtered rows into the Downloads folder and returns only its path; clear empties the table and keeps recording; stop disables Network and keeps the table readable. Credential header, cookie, and query values and embedded tokens are redacted unless sanitizeOutput is false. Iframes nested inside a cross-site iframe are not covered.',
+      'Request table of a tab held by chrome_cdp_session (start it first; its stop ends everything). start enables the Network domain on the tab and on every cross-site iframe and worker the session auto-attaches (a re-created iframe is paused until it is enabled), and records every request from then on, whatever the session event filter: method, url, type, status, timing, initiator with stack, the renderer headers and the wire headers (Cookie, Set-Cookie), redirects as linked rows, WebSocket frames, and EventSource messages. Bodies are read when a request finishes, because Chrome drops them once the document navigates: bodies="api" (default) keeps Document/XHR/Fetch/Other responses, "all" also scripts, styles, images, and fonts, "none" none; request bodies are kept whenever the page sends one. Each body keeps up to maxBodyBytes and all bodies share 32 MB (oldest evicted first); a body that was not kept is read from Chrome on demand while it still exists. list pages rows by seq (filter by url substring, method, types, status, state, sessionId); get returns one row in full with headers, auth (names of credential headers and cookies, never values), body previews, and timings; body pages the full request or response body (text by chars, binary as base64 by bytes); messages pages WebSocket/EventSource messages; har writes a HAR 1.2 file of the filtered rows into the Downloads folder and returns only its path; clear empties the table and keeps recording; stop disables Network and Fetch and keeps the table readable. intercept (needs recording on) adds a rule: requests whose url matches rule.urlPattern (Chrome glob: * any run, ? one char), optionally only of rule.resourceTypes, pause at rule.stage request (default) or response in the tab, every cross-site iframe and service worker (dedicated worker requests pause in their page) and are answered at once by the first matching rule: continue (at the request stage optionally changing url, method, headers merged over the originals, removeHeaders, postData), fulfill (status, headers, body, bodyBase64), fail (errorReason), or log (continue unchanged and record). Each row lists the rule and action that touched it (intercepted; get shows intercepts with the changes). A request is never left paused: on a rule error it is continued unchanged, and unintercept, stop, and the session stop disable Fetch, which releases anything still paused. rules lists rules with hit counts and the last 50 paused requests. replay sends row seq again with fetch from the frame or worker that sent it (its cookies, Origin, and Referer, in an isolated world the page cannot patch); replay.method is required and the body must be given (replay.body) or the original confirmed (replay.useOriginalBody), never implied; the new rows carry replayOf=seq. Forbidden headers (Cookie, Origin, Host, Sec-*) are dropped by fetch and reported. Credential header, cookie, and query values and embedded tokens are redacted unless sanitizeOutput is false. Iframes nested inside a cross-site iframe are not covered.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['start', 'list', 'get', 'body', 'messages', 'har', 'clear', 'stop'],
-          description: 'start | list | get | body | messages | har | clear | stop.',
+          enum: [
+            'start',
+            'list',
+            'get',
+            'body',
+            'messages',
+            'har',
+            'clear',
+            'stop',
+            'intercept',
+            'rules',
+            'unintercept',
+            'replay',
+          ],
+          description:
+            'start | list | get | body | messages | har | clear | stop | intercept | rules | unintercept | replay.',
         },
         tabId: {
           type: 'number',
@@ -1927,7 +1941,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         },
         seq: {
           type: 'number',
-          description: 'get, body, messages: row seq from list.',
+          description: 'get, body, messages, replay: row seq from list.',
         },
         part: {
           type: 'string',
@@ -1995,6 +2009,115 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'boolean',
           description:
             'Redact credential header, cookie, and query values and embedded tokens in output and HAR (default true).',
+        },
+        rule: {
+          type: 'object',
+          description:
+            'intercept: the rule. Only the fields of its action are accepted; continue at the response stage takes no changes.',
+          properties: {
+            urlPattern: {
+              type: 'string',
+              description:
+                'Chrome glob on the full url, e.g. "*://*/api/*" (* any run, ? one char).',
+            },
+            resourceTypes: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Only these CDP resource types, e.g. ["XHR","Fetch"] (default all).',
+            },
+            stage: {
+              type: 'string',
+              enum: ['request', 'response'],
+              description: 'Pause before sending (default) or after response headers arrive.',
+            },
+            action: {
+              type: 'string',
+              enum: ['continue', 'fulfill', 'fail', 'log'],
+              description: 'What to do with a matching paused request.',
+            },
+            url: { type: 'string', description: 'continue: send to this absolute url instead.' },
+            method: { type: 'string', description: 'continue: HTTP method to send.' },
+            headers: {
+              type: 'object',
+              description:
+                'continue: headers set over the original ones. fulfill: the response headers.',
+            },
+            removeHeaders: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'continue: header names to drop.',
+            },
+            postData: { type: 'string', description: 'continue: request body text to send.' },
+            status: { type: 'number', description: 'fulfill: status code (default 200).' },
+            body: {
+              type: 'string',
+              description: 'fulfill: response body text, or base64 with bodyBase64 (max 2 MB).',
+            },
+            bodyBase64: { type: 'boolean', description: 'fulfill: body is base64.' },
+            errorReason: {
+              type: 'string',
+              enum: [
+                'Failed',
+                'Aborted',
+                'TimedOut',
+                'AccessDenied',
+                'ConnectionClosed',
+                'ConnectionReset',
+                'ConnectionRefused',
+                'ConnectionAborted',
+                'ConnectionFailed',
+                'NameNotResolved',
+                'InternetDisconnected',
+                'AddressUnreachable',
+                'BlockedByClient',
+                'BlockedByResponse',
+              ],
+              description: 'fail: network error to report (default Failed).',
+            },
+          },
+          required: ['urlPattern', 'action'],
+        },
+        ruleId: {
+          type: 'string',
+          description: 'unintercept: rule id from intercept or rules, or "all".',
+        },
+        replay: {
+          type: 'object',
+          description: 'replay: how to send row seq again.',
+          properties: {
+            method: {
+              type: 'string',
+              description: 'Required HTTP method; it is not copied from the row.',
+            },
+            body: {
+              type: 'string',
+              description: 'Body text to send (may be ""); not allowed with GET or HEAD.',
+            },
+            useOriginalBody: {
+              type: 'boolean',
+              description: 'true sends the recorded request body; use instead of body.',
+            },
+            url: { type: 'string', description: 'Absolute url to send to (default the row url).' },
+            headers: {
+              type: 'object',
+              description: 'Headers set over the recorded renderer headers.',
+            },
+            removeHeaders: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Recorded header names to leave out.',
+            },
+            credentials: {
+              type: 'string',
+              enum: ['include', 'same-origin', 'omit'],
+              description: 'fetch credentials mode (default include).',
+            },
+            timeoutMs: {
+              type: 'number',
+              description: 'Abort after this many ms (default 30000, max 60000).',
+            },
+          },
+          required: ['method'],
         },
       },
       required: ['action'],

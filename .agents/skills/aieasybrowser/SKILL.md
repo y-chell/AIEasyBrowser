@@ -274,6 +274,20 @@ aieasybrowser --session re call chrome_cdp_network '{"action":"har","url":"/api/
 - `messages` pages WebSocket frames and EventSource events. `har` writes HAR 1.2 to the Downloads folder and returns only `path`. Credential values are redacted unless `sanitizeOutput:false`.
 - `stop` disables Network and keeps the table readable. `clear` empties the table. Session `stop` ends everything. `chrome_network_capture` is webRequest-only, with no bodies.
 
+Interception and replay need `start` first:
+
+```bash
+aieasybrowser --session re call chrome_cdp_network '{"action":"intercept","rule":{"urlPattern":"*/api/user*","action":"fulfill","status":200,"body":"{\"ok\":true}"}}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"rules"}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"unintercept","ruleId":"all"}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"replay","seq":12,"replay":{"method":"POST","useOriginalBody":true}}'
+```
+
+- A rule matches `urlPattern` (glob, `*` and `?`), optional `resourceTypes`, and `stage` (`request` by default, or `response`). The first matching rule wins. Actions: `continue` (change `url`, `method`, `headers`, `removeHeaders`, `postData`; request stage only), `fulfill` (`status`, `headers`, `body` or `bodyBase64`), `fail` (`errorReason`), `log`. Every paused request is answered at once, so pages never wait on you; rule errors fall back to continuing unchanged.
+- Intercepted rows show `intercepted` (`ruleId:action`); `get` shows what changed. `rules` lists rules, hit counts, sessions, and the last 50 pauses. `unintercept` takes a rule id or `all`. Network `stop` and session `stop` also remove all rules.
+- Covered: the tab, cross-site iframes, service workers, and dedicated workers (their requests pause in the parent). Cookie and Origin headers cannot be changed by `continue`.
+- `replay` always needs an explicit `method`. Non-GET/HEAD needs exactly one of `body` or `useOriginalBody:true`. `url`, `headers`, `removeHeaders`, `credentials` (`include` by default), and `timeoutMs` are optional. It runs `fetch` in an isolated world of the frame that sent the row (or in the worker), so page cookies apply and page patches to `fetch` do not. Forbidden headers (Cookie, Origin, `Sec-*`) are dropped and listed. The new row has `replayOf`; the original lists `replays`. Replay refuses while that context is paused in the debugger.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.

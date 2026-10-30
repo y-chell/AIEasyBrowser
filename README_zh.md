@@ -274,6 +274,17 @@ aieasybrowser --session re call chrome_cdp_network '{"action":"har","url":"/api/
 
 请求按 `seq` 引用。`get` 返回渲染器请求头和线上请求头（含 Cookie、Set-Cookie），`auth` 只列凭据头名和 cookie 名；同时返回 body 摘要、发起者调用栈和分段耗时。重定向的每一跳是单独一行，用 `redirectedFrom` / `redirectedTo` 关联。Chrome 在导航后会丢弃响应体，所以请求结束时就读取：`bodies:"api"`（默认）保留 Document/XHR/Fetch/Other，`"all"` 全部保留，`"none"` 不保留。单个 body 最多保留 `maxBodyBytes`（默认 1 MB），所有 body 共用 32 MB，超出时淘汰最旧的。未保留的 body 在 Chrome 还有时按需读取。`body` 对文本按字符分页，对二进制按字节返回 base64，`part:"request"` 取请求体。`messages` 分页读取 WebSocket 帧和 EventSource 事件。`har` 把 HAR 1.2 写入下载目录，只返回 `path`。凭据头、cookie、query 的值和内嵌 token 默认脱敏，`sanitizeOutput:false` 关闭。`stop` 关闭 Network 并保留表，`clear` 清空表。跨站 iframe 重建时先暂停，Network 启用后再恢复。`chrome_network_capture` 的 debugger 后端（`needResponseBody`）已删除，只保留不带 body 的 webRequest 抓包。
 
+拦截和重放需要先 `start`：
+
+```bash
+aieasybrowser --session re call chrome_cdp_network '{"action":"intercept","rule":{"urlPattern":"*/api/user*","action":"fulfill","status":200,"body":"{\"ok\":true}"}}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"rules"}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"unintercept","ruleId":"all"}'
+aieasybrowser --session re call chrome_cdp_network '{"action":"replay","seq":12,"replay":{"method":"POST","useOriginalBody":true}}'
+```
+
+规则按 `urlPattern`（`*` 和 `?` 通配）、可选 `resourceTypes` 和 `stage`（默认 `request`，可选 `response`）匹配，第一条命中的规则生效。动作有 `continue`（仅请求阶段可改 `url`、`method`、`headers`、`removeHeaders`、`postData`）、`fulfill`（`status`、`headers`、`body` 或 `bodyBase64`）、`fail`（`errorReason`）和 `log`。每个暂停的请求都立即应答，页面不会等待 Agent；规则执行出错时原样放行。`Fetch.enable` 在根会话、跨站 iframe 和 service worker 子会话分别启用，dedicated worker 没有 Fetch 域，它的请求在所属页面会话暂停。命中的行带 `intercepted`（`ruleId:action`），`get` 的 `intercepts` 列出改了什么；`rules` 返回规则、命中数、已启用的会话和最近 50 次暂停。`unintercept` 接受规则 id 或 `all`，之后 `Fetch.disable`，仍暂停的请求随之放行；Network `stop` 和会话 `stop` 同样移除全部规则。`replay` 必须显式给 `method`，非 GET/HEAD 必须给 `body` 或 `useOriginalBody:true` 二选一，不会默认沿用原请求。请求在发出该行的 frame 的隔离 world（worker 行在 worker 内）用 `fetch` 发送，带页面 cookie、Origin、Referer，页面改写的 `fetch` 不影响它；Cookie、Origin、`Sec-*` 等禁止头会被丢弃并在结果里列出。新行带 `replayOf`，原行列出 `replays`。该上下文被调试器暂停时拒绝重放。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -365,7 +376,7 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 
 `pnpm test:cli-cdp-inject` 要求已重载包含 `chrome_cdp_inject` 的扩展。临时网页含同站 iframe、跨站 iframe 及其嵌套 iframe，签名对象在 DOMContentLoaded 中才创建。脚本验证：未 start 时被拒；注册主世界与命名 world 脚本、函数/属性/fetch/XHR hook 后重载，顶层第一个页面脚本前已执行，命名 world 全局与主世界隔离，各 frame（含重建后的跨站 iframe 新子会话）都执行并产生记录；函数 hook 在 DOMContentLoaded 后安装，调用记录含参数、返回值和调用栈，fetch/XHR 记录头名不含头值；`maxRecords` 生效；remove 后记录被丢弃、重载后不再安装；其他任务、非法路径、未知 id 和未知 hook 类型被拒；`stop` 后无调试附着，下次加载不再注入，跨站 iframe 正常加载。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
-`pnpm test:cli-cdp-network` 要求已重载包含 `chrome_cdp_network` 的扩展。临时网页含跨站 iframe，并提供 JSON、二进制、2.1 MB 中文文本、SSE 和 WebSocket 回显接口。脚本验证以下内容：未 start 时被拒；JSON 请求的线上头默认脱敏，`auth` 只给名字，`sanitizeOutput:false` 时给原值；请求体和响应体与页面看到的一致；二进制按字节取 base64；大文本按整字截到 1 MB 并分页；跨站 iframe 的请求带子会话 sessionId；SSE 和 WebSocket 消息逐条记录；事件缓冲里没有 Network 事件；重载后旧 body 仍可读，重建的跨站 iframe 在新子会话里继续记录。HAR 默认不含凭据，raw 模式保留凭据，文件大小与返回值一致。脚本还验证：其他任务、未知 seq、非流请求读消息、重复 start、非法文件名、未知 action 和 `needResponseBody` 被拒；`stop` 后不再记录；会话 `stop` 后无调试附着；webRequest 抓包仍能抓到请求。结束删除 HAR 文件、关闭标签、忘记任务并退出临时服务。
+`pnpm test:cli-cdp-network` 要求已重载包含 `chrome_cdp_network` 的扩展。临时网页含跨站 iframe，并提供 JSON、二进制、2.1 MB 中文文本、SSE 和 WebSocket 回显接口。脚本验证以下内容：未 start 时被拒；JSON 请求的线上头默认脱敏，`auth` 只给名字，`sanitizeOutput:false` 时给原值；请求体和响应体与页面看到的一致；二进制按字节取 base64；大文本按整字截到 1 MB 并分页；跨站 iframe 的请求带子会话 sessionId；SSE 和 WebSocket 消息逐条记录；事件缓冲里没有 Network 事件；重载后旧 body 仍可读，重建的跨站 iframe 在新子会话里继续记录。HAR 默认不含凭据，raw 模式保留凭据，文件大小与返回值一致。脚本还验证：其他任务、未知 seq、非流请求读消息、重复 start、非法文件名、未知 action 和 `needResponseBody` 被拒；`stop` 后不再记录；会话 `stop` 后无调试附着；webRequest 抓包仍能抓到请求。拦截部分验证：continue 改头和请求体后服务端收到改动；fulfill 返回 418、fail 得到 `net::ERR_BLOCKED_BY_CLIENT.Inspector`、响应阶段 fulfill 返回 203；跨站 iframe 和 dedicated worker 的请求被命中并关联到各自的行；unintercept、Network `stop`、会话 `stop` 后规则不再生效。重放部分验证：显式 body 和自定义头送达服务端，新行带 `replayOf`、原行列出 `replays`、带上页面 cookie；`useOriginalBody` 发出的请求体与原请求一致；跨站 iframe 行在其子会话重放，worker 行在 worker 内重放并关联到新行；缺 body、响应阶段改请求、未知规则 id 被拒。结束删除 HAR 文件、关闭标签、忘记任务并退出临时服务。
 
 ## 许可证
 

@@ -318,16 +318,222 @@ async function runCdpNetwork() {
       assert(rawHar.har.log.entries.every((entry) => entry._resourceType === 'fetch'));
       assert(rawHar.text.includes('Bearer ' + secret), 'raw HAR keeps credentials');
 
-      // 10. Rejections.
+      // 10. Interception: rules answer paused requests in the root, the OOPIF, and a worker.
+      const intercept = (rule) => net({ action: 'intercept', rule }).rule.id;
+      const continueRule = intercept({
+        urlPattern: '*kind=json*',
+        action: 'continue',
+        headers: { 'X-Trace': 'trace-intercepted' },
+        postData: '{"value":"intercepted"}',
+      });
+      const mockRule = intercept({
+        urlPattern: '*kind=mock*',
+        action: 'fulfill',
+        status: 418,
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'mocked-' + runId,
+      });
+      const failRule = intercept({
+        urlPattern: '*kind=blocked*',
+        action: 'fail',
+        errorReason: 'BlockedByClient',
+      });
+      const logRule = intercept({ urlPattern: '*kind=*worker*', action: 'log' });
+      const childRule = intercept({ urlPattern: '*kind=child*', action: 'log' });
+      const lateRule = intercept({
+        urlPattern: '*kind=late*',
+        stage: 'response',
+        action: 'fulfill',
+        status: 203,
+        body: 'late-' + runId,
+      });
+      const modified = evalPage('return await window.netJson("orig")');
+      assert.equal(modified[0], 201);
+      assert.deepEqual(
+        [JSON.parse(modified[1]).trace, JSON.parse(modified[1]).body],
+        ['trace-intercepted', '{"value":"intercepted"}'],
+        'the server saw the changed header and body',
+      );
+      assert.deepEqual(evalPage('return await window.netGet("mock")'), [
+        418,
+        ('mocked-' + runId).length,
+        'mocked-' + runId,
+      ]);
+      assert.equal(evalPage('return await window.netGet("blocked")')[0], 'error');
+      assert.deepEqual(evalPage('return (await window.netGet("late")).slice(0, 3)'), [
+        203,
+        ('late-' + runId).length,
+        'late-' + runId,
+      ]);
+      const interceptChild = childSession();
+      childFetch(interceptChild.sessionId);
+      evalPage('window.netWorker = new Worker("/frames-worker.js?kind=dedicated"); return 1');
+      let worker;
+      for (let attempt = 0; attempt < 25 && !worker; attempt += 1) {
+        worker = cdpSession({ action: 'status' }).targets.find(
+          (target) => target.type === 'worker',
+        );
+        if (!worker) await sleep(200);
+      }
+      assert(worker, 'dedicated worker attached');
+      const workerStatus = call(name, 'chrome_javascript', {
+        sessionId: worker.sessionId,
+        // Read the body: an unread worker response never reports loadingFinished, so the row stays pending.
+        code: 'const r = await fetch("/net-api?kind=worker"); await r.text(); return r.status',
+      });
+      assert.equal(jsValue({ result: workerStatus }), 200);
+      const interceptedRow = (suffix, predicate = () => true) =>
+        waitRow(
+          (row) =>
+            row.url.endsWith(suffix) &&
+            row.intercepted &&
+            row.state !== 'pending' &&
+            predicate(row),
+          'intercepted ' + suffix,
+        );
+      const modifiedRow = await interceptedRow('kind=json', (row) => row.seq > reloadedFetch.seq);
+      assert.deepEqual(modifiedRow.intercepted, [continueRule + ':continue']);
+      const modifiedDetail = net({ action: 'get', seq: modifiedRow.seq }).request;
+      assert.deepEqual(modifiedDetail.intercepts[0].changes, ['postData', 'header X-Trace']);
+      const mockRow = await interceptedRow('kind=mock');
+      assert.deepEqual([mockRow.status, mockRow.intercepted], [418, [mockRule + ':fulfill']]);
+      assert.equal(
+        net({ action: 'body', seq: mockRow.seq, sanitizeOutput: false }).text,
+        'mocked-' + runId,
+      );
+      const blockedRow = await interceptedRow('kind=blocked');
+      assert.equal(blockedRow.state, 'failed');
+      assert.match(blockedRow.error, /ERR_BLOCKED_BY_CLIENT/);
+      assert.deepEqual(blockedRow.intercepted, [failRule + ':fail']);
+      const lateRow = await interceptedRow('kind=late');
+      assert.equal(lateRow.status, 203);
+      assert.equal(
+        net({ action: 'get', seq: lateRow.seq }).request.intercepts[0].responseStatus,
+        200,
+        'response stage saw the real status',
+      );
+      assert.deepEqual(lateRow.intercepted, [lateRule + ':fulfill']);
+      const childLogged = await interceptedRow('kind=child', (row) => row.seq > modifiedRow.seq);
+      assert.equal(childLogged.sessionId, interceptChild.sessionId);
+      assert.deepEqual(childLogged.intercepted, [childRule + ':log']);
+      const workerRow = await interceptedRow('kind=worker');
+      assert.equal(
+        workerRow.sessionId,
+        worker.sessionId,
+        'worker request linked to the worker row',
+      );
+      assert.deepEqual(workerRow.intercepted, [logRule + ':log']);
+      const ruleList = net({ action: 'rules' });
+      assert.deepEqual(
+        ruleList.rules.map((rule) => [rule.id, rule.hits]),
+        [
+          [continueRule, 1],
+          [mockRule, 1],
+          [failRule, 1],
+          [logRule, 1],
+          [childRule, 1],
+          [lateRule, 1],
+        ],
+      );
+      assert(
+        ruleList.sessions.includes('root') && ruleList.sessions.includes(interceptChild.sessionId),
+      );
+      assert(!ruleList.sessions.includes(worker.sessionId), 'no Fetch in the dedicated worker');
+      assert.equal(ruleList.errors, undefined, JSON.stringify(ruleList.errors));
+      assert.deepEqual(net({ action: 'unintercept', ruleId: mockRule }).removed, [mockRule]);
+      assert.equal(
+        evalPage('return (await window.netGet("mock"))[0]'),
+        200,
+        'removed rule no longer applies',
+      );
+      assert.equal(net({ action: 'unintercept', ruleId: 'all' }).rules, 0);
+      assert.equal(
+        evalPage('return (await window.netGet("blocked"))[0]'),
+        200,
+        'no rule after all',
+      );
+
+      // 11. Replay: explicit method and body, from the frame or worker that sent it, linked by seq.
+      const replayed = net({
+        action: 'replay',
+        seq: modifiedRow.seq,
+        sanitizeOutput: false,
+        replay: {
+          method: 'POST',
+          body: '{"value":"replayed"}',
+          headers: { 'X-Trace': 'trace-replay' },
+        },
+      });
+      assert.equal(replayed.response.status, 201);
+      const replayedEcho = JSON.parse(replayed.response.preview);
+      assert.deepEqual(
+        [replayedEcho.body, replayedEcho.trace],
+        ['{"value":"replayed"}', 'trace-replay'],
+      );
+      assert(
+        replayed.request.droppedHeaders === undefined ||
+          !replayed.request.droppedHeaders.includes('X-Trace'),
+      );
+      assert.equal(replayed.linked, true);
+      const replayRow = rows().find((row) => row.seq === replayed.seqs[0]);
+      assert.equal(replayRow.replayOf, modifiedRow.seq);
+      assert(
+        rows()
+          .find((row) => row.seq === modifiedRow.seq)
+          .replays.includes(replayRow.seq),
+      );
+      const replayDetail = net({
+        action: 'get',
+        seq: replayRow.seq,
+        sanitizeOutput: false,
+      }).request;
+      assert(replayDetail.auth.cookies.includes('net_session'), 'replay carried the page cookies');
+      const originalBody = net({ action: 'body', seq: json.seq, part: 'request' }).text;
+      const again = net({
+        action: 'replay',
+        seq: json.seq,
+        sanitizeOutput: false,
+        replay: { method: 'POST', useOriginalBody: true },
+      });
+      assert.equal(JSON.parse(again.response.preview).body, originalBody);
+      const childReplay = net({
+        action: 'replay',
+        seq: childLogged.seq,
+        sanitizeOutput: false,
+        replay: { method: 'GET' },
+      });
+      assert.equal(childReplay.response.status, 200);
+      assert.equal(childReplay.sentFrom.sessionId, interceptChild.sessionId);
+      assert.equal(JSON.parse(childReplay.response.preview).kind, 'child');
+      const workerReplay = net({ action: 'replay', seq: workerRow.seq, replay: { method: 'GET' } });
+      assert.deepEqual(
+        [workerReplay.response.status, workerReplay.sentFrom.kind, workerReplay.linked],
+        [200, 'worker', true],
+      );
+
+      // 12. Rejections.
       const rejected = {
         otherTask: fails(other, 'chrome_cdp_network', { tabId, action: 'list' }, 'other task'),
         unknownSeq: fails(name, 'chrome_cdp_network', { action: 'get', seq: 999_999 }),
         notStream: fails(name, 'chrome_cdp_network', { action: 'messages', seq: json.seq }),
         activeAgain: fails(name, 'chrome_cdp_network', { action: 'start' }),
         badFile: fails(name, 'chrome_cdp_network', { action: 'har', filename: '../x' }),
+        replayNoBody: fails(name, 'chrome_cdp_network', {
+          action: 'replay',
+          seq: json.seq,
+          replay: { method: 'POST' },
+        }),
+        responseChange: fails(name, 'chrome_cdp_network', {
+          action: 'intercept',
+          rule: { urlPattern: '*', stage: 'response', action: 'continue', url: fixture.origin },
+        }),
+        unknownRule: fails(name, 'chrome_cdp_network', {
+          action: 'unintercept',
+          ruleId: 'rule-999',
+        }),
         // Closed schemas reject these in the native server, before the extension.
         badAction: assertFailure(
-          runCli(name, ['call', 'chrome_cdp_network', '{"action":"replay"}']),
+          runCli(name, ['call', 'chrome_cdp_network', '{"action":"resend"}']),
           'unknown action',
         ).error.code,
         noDebuggerCapture: assertFailure(
@@ -345,11 +551,20 @@ async function runCdpNetwork() {
         notStream: 'NETWORK_NO_MESSAGES',
         activeAgain: 'NETWORK_ACTIVE',
         badFile: 'INVALID_ARGUMENT',
+        replayNoBody: 'INVALID_ARGUMENT',
+        responseChange: 'INVALID_ARGUMENT',
+        unknownRule: 'INTERCEPT_RULE_NOT_FOUND',
         badAction: 'INVALID_ARGUMENT',
         noDebuggerCapture: 'INVALID_ARGUMENT',
       });
 
-      // 11. stop keeps the table readable and records nothing more; clear empties it.
+      // 13. stop disables Fetch with a rule left, keeps the table readable, records nothing more.
+      intercept({ urlPattern: '*kind=mock*', action: 'fulfill', status: 418 });
+      assert.equal(evalPage('return (await window.netGet("mock"))[0]'), 418);
+      await waitRow(
+        (row) => row.url.endsWith('kind=mock') && row.status === 418 && row.seq > workerRow.seq,
+        'mock before stop',
+      );
       const total = rows().length;
       assert.deepEqual(net({ action: 'stop' }), {
         success: true,
@@ -359,12 +574,25 @@ async function runCdpNetwork() {
         requests: total,
       });
       evalPage('return await window.netJson("after-stop")');
+      assert.equal(
+        evalPage('return (await window.netGet("mock"))[0]'),
+        200,
+        'Fetch off after stop',
+      );
       await sleep(300);
       assert.equal(rows().length, total);
       assert.equal(net({ action: 'clear' }).cleared, total);
 
-      // 12. Session stop: nothing attached, the page and the OOPIF load and fetch normally.
+      // 14. Session stop with a rule on: nothing attached, the page loads and fetches normally.
+      net({ action: 'start' });
+      intercept({ urlPattern: '*kind=mock*', action: 'fulfill', status: 418 });
+      assert.equal(evalPage('return (await window.netGet("mock"))[0]'), 418);
       assert.equal(cdpSession({ action: 'stop' }).stopped, true);
+      assert.equal(
+        evalPage('return (await window.netGet("mock"))[0]'),
+        200,
+        'Fetch off after session stop',
+      );
       started = false;
       assert.deepEqual(debugTargets('t.tabId === ' + tabId + ' && t.attached'), []);
       evalPage('setTimeout(() => location.reload(), 0); return 1');
@@ -373,7 +601,7 @@ async function runCdpNetwork() {
       assert.equal(evalPage('return (await window.netJson("clean"))[0]'), 201);
       assert.deepEqual(debugTargets('t.tabId === ' + tabId + ' && t.attached'), []);
 
-      // 13. The webRequest capture still works on its own.
+      // 15. The webRequest capture still works on its own.
       // A match pattern without a port matches every port.
       const capturePattern = fixture.origin.replace(/:\d+$/, '') + '/net?run=' + name + '*';
       const captureStart = call(name, 'chrome_network_capture', {
@@ -403,6 +631,23 @@ async function runCdpNetwork() {
         },
         streams: { sse: sseMessages.total, websocket: wsMessages.total },
         har: { entries: harResult.entries, bytes: harResult.bytes, redacted: true, raw: true },
+        intercept: {
+          continueModified: true,
+          fulfill: 418,
+          fail: blockedRow.error,
+          responseStage: lateRow.status,
+          oopif: true,
+          dedicatedWorker: true,
+          releasedOnStop: true,
+          releasedOnSessionStop: true,
+        },
+        replay: {
+          explicitBody: replayRow.seq,
+          originalBody: true,
+          oopif: childReplay.response.status,
+          worker: workerReplay.response.status,
+          cookies: true,
+        },
         rejected,
         webRequestCapture: captured.requests.length,
         cleanAfterStop: true,

@@ -6,6 +6,16 @@ import {
   type ChildStartHost,
 } from '@/utils/cdp-child-start';
 import { isSensitiveKey } from '@/utils/output-sanitizer';
+import {
+  createInterceptState,
+  endIntercept,
+  setupInterceptChild,
+  stopIntercept,
+  takePendingNotes,
+  trackInterceptEvent,
+  type InterceptNote,
+  type InterceptState,
+} from '@/utils/cdp-network-intercept';
 
 /**
  * Request table of one held session (chrome_cdp_network).
@@ -115,6 +125,10 @@ export interface NetworkRecord {
   messages?: NetworkMessage[];
   messageCount?: number;
   messagesDropped?: number;
+  intercepts?: InterceptNote[];
+  /** Seq of the row this request replays, and the replays made of this row. */
+  replayOf?: number;
+  replays?: number[];
 }
 
 export interface NetworkOptions {
@@ -143,6 +157,10 @@ export interface NetworkState {
   bodyBytes: number;
   evictedBodies: number;
   errors: string[];
+  intercept: InterceptState;
+  /** Replay id (sourceURL of the replay script) -> seq of the replayed row. */
+  replaySources: Map<string, number>;
+  nextReplayId: number;
 }
 
 export interface NetworkSessionHost extends ChildStartHost {
@@ -168,6 +186,9 @@ export function createNetworkState(): NetworkState {
     bodyBytes: 0,
     evictedBodies: 0,
     errors: [],
+    intercept: createInterceptState(),
+    replaySources: new Map(),
+    nextReplayId: 1,
   };
 }
 
@@ -187,6 +208,7 @@ export function clearNetworkTable(state: NetworkState): number {
 export function endNetwork(state: NetworkState) {
   state.enabled = false;
   state.ready.clear();
+  endIntercept(state.intercept);
 }
 
 function noteError(state: NetworkState, message: string) {
@@ -262,6 +284,7 @@ export async function setupNetworkChild(
   } catch (error) {
     noteError(host.network, `enable in ${sessionId}: ${message(error)}`);
   }
+  await setupInterceptChild(host, sessionId, type);
 }
 
 /** Network.disable everywhere it was enabled, after bodies already being read are stored. */
@@ -289,7 +312,9 @@ export async function disableNetwork(host: NetworkSessionHost): Promise<string[]
 }
 
 export async function stopNetwork(host: NetworkSessionHost): Promise<string[]> {
-  const errors = await disableNetwork(host);
+  // Fetch first: disabling it releases any request still paused.
+  const errors = (await stopIntercept(host)).map((error) => `disable fetch ${error}`);
+  errors.push(...(await disableNetwork(host)));
   try {
     await releaseChildStart(host, 'network');
   } catch (error) {
@@ -442,11 +467,27 @@ function toEpoch(record: NetworkRecord, timestamp: unknown): number {
     : Date.now();
 }
 
+export const REPLAY_SOURCE_PREFIX = 'aeb-replay://';
+
+/** A replay runs a script named aeb-replay://<id>; its fetch carries that script in the initiator stack. */
+function replaySource(state: NetworkState, initiator: any): number | undefined {
+  const frames = initiator?.stack?.callFrames;
+  if (!Array.isArray(frames)) return undefined;
+  for (const frame of frames) {
+    const url = String(frame?.url ?? '');
+    if (url.startsWith(REPLAY_SOURCE_PREFIX)) {
+      return state.replaySources.get(url.slice(REPLAY_SOURCE_PREFIX.length));
+    }
+  }
+  return undefined;
+}
+
 function createRecord(
   state: NetworkState,
   key: string,
   requestId: string,
-  fields: Pick<NetworkRecord, 'url' | 'method' | 'resourceType' | 'startedAt' | 'requestHeaders'>,
+  fields: Pick<NetworkRecord, 'url' | 'method' | 'resourceType' | 'startedAt' | 'requestHeaders'> &
+    Partial<Pick<NetworkRecord, 'initiator'>>,
 ): NetworkRecord {
   const id = `${key}\n${requestId}`;
   const record: NetworkRecord = {
@@ -465,6 +506,14 @@ function createRecord(
     if (extra.response) record.responseHeadersExtra = extra.response;
   }
   if (STREAM_TYPES.has(record.resourceType)) record.messages = [];
+  const notes = takePendingNotes(state.intercept, requestId);
+  if (notes) record.intercepts = notes;
+  const replayOf = replaySource(state, fields.initiator);
+  if (replayOf !== undefined) {
+    record.replayOf = replayOf;
+    const original = state.records.get(replayOf);
+    if (original) (original.replays ??= []).push(record.seq);
+  }
   state.records.set(record.seq, record);
   state.latest.set(id, record);
   while (state.records.size > state.options.maxRequests) {
@@ -544,6 +593,7 @@ export function trackNetworkEvent(
   sessionId: string | undefined,
 ) {
   const state = host.network;
+  trackInterceptEvent(host, method, params, sessionId);
   if (method === 'Target.detachedFromTarget') {
     if (params?.sessionId) state.ready.delete(params.sessionId);
     return;
@@ -577,12 +627,12 @@ ${params.requestId}`);
         startedAt:
           typeof params.wallTime === 'number' ? Math.round(params.wallTime * 1000) : Date.now(),
         requestHeaders: request.headers ?? {},
+        ...(params.initiator ? { initiator: params.initiator } : {}),
       });
       if (typeof params.timestamp === 'number') record.monotonicStart = params.timestamp;
       if (params.frameId) record.frameId = params.frameId;
       if (params.loaderId) record.loaderId = params.loaderId;
       if (params.documentURL) record.documentURL = params.documentURL;
-      if (params.initiator) record.initiator = params.initiator;
       if (current && params.redirectResponse) {
         record.redirectedFrom = current.seq;
         current.redirectedTo = record.seq;

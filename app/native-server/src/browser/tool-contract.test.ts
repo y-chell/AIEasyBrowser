@@ -154,7 +154,29 @@ const INVALID_ARGS: Array<[string, Record<string, unknown>, string]> = [
   ['chrome_cdp_inject', { action: 'add', source: 1 }, 'args/source'],
   ['chrome_cdp_inject', { action: 'hook', hook: 'fetch', maxRecords: '9' }, 'args/maxRecords'],
   ['chrome_cdp_network', {}, 'args/action'],
-  ['chrome_cdp_network', { action: 'replay' }, 'args/action'],
+  ['chrome_cdp_network', { action: 'resend' }, 'args/action'],
+  ['chrome_cdp_network', { action: 'intercept', rule: { action: 'log' } }, 'args/rule/urlPattern'],
+  [
+    'chrome_cdp_network',
+    { action: 'intercept', rule: { urlPattern: '*', action: 'block' } },
+    'args/rule/action',
+  ],
+  [
+    'chrome_cdp_network',
+    { action: 'intercept', rule: { urlPattern: '*', action: 'log', delay: 1 } },
+    'args/rule/delay',
+  ],
+  [
+    'chrome_cdp_network',
+    { action: 'intercept', rule: { urlPattern: '*', action: 'fail', errorReason: 'Nope' } },
+    'args/rule/errorReason',
+  ],
+  ['chrome_cdp_network', { action: 'replay', seq: 1, replay: {} }, 'args/replay/method'],
+  [
+    'chrome_cdp_network',
+    { action: 'replay', seq: 1, replay: { method: 'GET', credentials: 'all' } },
+    'args/replay/credentials',
+  ],
   ['chrome_cdp_network', { action: 'start', bodies: 'some' }, 'args/bodies'],
   ['chrome_cdp_network', { action: 'body', seq: '1' }, 'args/seq'],
   ['chrome_cdp_network', { action: 'body', seq: 1, part: 'both' }, 'args/part'],
@@ -198,14 +220,14 @@ describe('direct browser capability contracts', () => {
     };
     for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
     expect(counts).toEqual({
-      type: 489,
-      properties: 54,
-      required: 50,
-      additionalProperties: 54,
-      description: 401,
-      enum: 41,
+      type: 516,
+      properties: 56,
+      required: 52,
+      additionalProperties: 56,
+      description: 425,
+      enum: 45,
       oneOf: 2,
-      items: 7,
+      items: 10,
     });
   });
 
