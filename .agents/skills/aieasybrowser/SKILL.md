@@ -5,7 +5,7 @@ description: Operate the user's existing Chrome tabs and authenticated web appli
 
 # AIEasyBrowser
 
-Use `aieasybrowser` to control the Chrome profile with the installed extension. The CLI is the agent entrypoint and talks directly to the running local bridge, without a handshake or tool-catalog preload. All 39 browser capabilities remain available; MCP endpoints and the STDIO proxy have been removed.
+Use `aieasybrowser` to control the Chrome profile with the installed extension. The CLI is the agent entrypoint and talks directly to the running local bridge, without a handshake or tool-catalog preload. All 46 browser capabilities remain available; MCP endpoints and the STDIO proxy have been removed.
 
 ## Task loop
 
@@ -302,6 +302,22 @@ aieasybrowser --session re call chrome_cdp_storage '{"action":"readStore","origi
 - `items`/`setItem`/`removeItem`/`clearItems` work on one origin and `area` (`local` or `session`). `databases` and `readStore` (store or `index`, `range` `only` or `lower`/`upper` with `lowerOpen`/`upperOpen`, `direction:"prev"`, `offset`/`limit`) are read-only. `caches`, `cacheEntries` (`pathFilter`), and `cacheResponse` (`url`) read Cache Storage. Page with `nextOffset`.
 - Storage, IndexedDB, and Cache Storage fail with `STORAGE_PAGE_PAUSED` while that frame is paused in the debugger; resume first. Cookies still work.
 - Cookie values, values under sensitive names, and embedded tokens are redacted unless `sanitizeOutput:false`. Do not change storage of sites the user did not ask about.
+
+`chrome_cdp_profile` measures CSS coverage, CPU time, and heap instance counts of the held tab. Chrome gives extensions no Profiler or HeapProfiler domain: there is no JavaScript coverage and no heap snapshot, so do not promise them.
+
+```bash
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cssStart"}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cssStop"}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cpuStart"}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cpuStop","top":20}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"heapSample","constructors":["Map","app.models.User"]}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"heapDiff","from":1,"to":2}'
+```
+
+- CSS: `cssStart` tracks the tab and attached cross-site iframes (workers have no CSS). `cssReport` merges what was used so far; `cssStop` ends tracking and returns the final report, which `cssReport` keeps reading. Sizes are UTF-16 chars of the sheet text; unused includes whitespace and comments. Filter with `url` or `sessionId`.
+- CPU: `cpuStart`/`cpuStop` record through Chrome tracing, about 0.5 ms sampling, not configurable. Chrome runs one trace in the whole browser, shared with `performance_start_trace`: a second trace fails with `TRACE_BUSY`. `cpuStop` writes one `.cpuprofile` per sampled thread (`target` page, iframe, worker, or unknown) to Downloads and returns `path` plus hotspots by self time. Hotspot `scriptId` and 0-based `lineNumber`/`columnNumber` belong to that profile's `sessionId`; read the code with `chrome_cdp_scripts source` in the same session. `otherFrames` means the thread also ran frames outside this tab.
+- Heap: `heapUsage` lists heap sizes of the page and every child session. `heapSample` counts live instances of global constructor paths (prototype chain, subclasses included) in the page or one `sessionId`; `heapDiff` compares two samples of the same session (count before, after, delta; no self size). Counting collects garbage and walks the whole heap: the page freezes about 0.5-1 s per constructor, so sample only what you need. `heapSample` fails with `PROFILE_PAGE_PAUSED` while that session is paused.
+- A second `cssStart`/`cpuStart` fails with `CSS_COVERAGE_ACTIVE`/`CPU_PROFILE_ACTIVE`. Session `stop` ends tracking and discards an unfinished CPU trace. Delete `.cpuprofile` files you no longer need; they may contain page URLs and function names.
 
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 

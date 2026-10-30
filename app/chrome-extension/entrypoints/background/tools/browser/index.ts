@@ -22,6 +22,7 @@ export { cdpDebuggerTool } from './cdp-debugger';
 export { cdpInjectTool } from './cdp-inject';
 export { cdpNetworkTool } from './cdp-network';
 export { cdpStorageTool } from './cdp-storage';
+export { cdpProfileTool } from './cdp-profile';
 export { consoleTool } from './console';
 export { collectDebugEvidenceTool } from './debug-evidence';
 export { fileUploadTool, uploadStatusTool } from './file-upload';

@@ -56,6 +56,9 @@ function describeSession(session: HeldSession) {
       seq: pause.seq,
     })),
     ...(session.network.enabled ? { network: { requests: session.network.records.size } } : {}),
+    ...(session.profile.cpu || session.profile.css.active
+      ? { profiling: { cpu: !!session.profile.cpu, css: session.profile.css.active } }
+      : {}),
     ...(session.childStart.errors.length ? { childStartErrors: session.childStart.errors } : {}),
   };
 }

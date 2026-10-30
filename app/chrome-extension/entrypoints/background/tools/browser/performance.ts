@@ -2,6 +2,7 @@ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import { claimTracing, releaseTracing, tracingError } from '@/utils/cdp-tracing-lock';
 
 type OwnerTag = 'performance';
 
@@ -222,6 +223,8 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
 
   async execute(args: StartTraceParams): Promise<ToolResult> {
     const { reload = false, autoStop = false, durationMs = 5000 } = args || {};
+    let claimedTab: number | undefined;
+    let created: TraceSessionState | undefined;
 
     try {
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -236,6 +239,9 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
           isError: false,
         };
       }
+      // Tracing is browser-wide: chrome_cdp_profile cpuStart in any tab blocks this.
+      claimTracing({ tabId, tool: 'performance_start_trace' });
+      claimedTab = tabId;
 
       await cdpSessionManager.attach(tabId, 'performance');
 
@@ -245,7 +251,8 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
         startedAt: Date.now(),
         pageUrl: activeTab.url || '',
         listener: (source, method, params) => {
-          if (source.tabId !== tabId) return;
+          // After completion a chrome_cdp_profile trace of this tab is not ours.
+          if (source.tabId !== tabId || !state.recording) return;
           if (method === 'Tracing.dataCollected' && params?.value) {
             try {
               state.events.push(...(params.value as any[]));
@@ -254,12 +261,14 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
             }
           } else if (method === 'Tracing.tracingComplete') {
             state.recording = false;
+            releaseTracing(tabId, 'performance_start_trace');
             state.stopResolver?.({ completed: true });
           }
         },
       };
       chrome.debugger.onEvent.addListener(state.listener);
       sessions.set(tabId, state);
+      created = state;
 
       // Start tracing with categories
       const cats = tracingCategories().join(',');
@@ -305,7 +314,17 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
         isError: false,
       };
     } catch (e: any) {
-      return createErrorResponse(`Failed to start performance trace: ${e?.message || e}`);
+      // Only attach or Tracing.start throw here, so nothing is recording.
+      if (claimedTab !== undefined) {
+        if (created) {
+          chrome.debugger.onEvent.removeListener(created.listener);
+          sessions.delete(claimedTab);
+        }
+        releaseTracing(claimedTab, 'performance_start_trace');
+      }
+      return createErrorResponse(
+        `Failed to start performance trace: ${tracingError(e).message || e}`,
+      );
     }
   }
 }

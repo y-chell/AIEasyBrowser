@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>AEB profile fixture</title>
+    <link rel="stylesheet" href="/profile.css" />
+    <!-- The query looks like a token so redaction of urls in profiles can be checked. -->
+    <script src="/profile-app.js?access_token=aebprofile0123456789abcdef"></script>
+  </head>
+  <body>
+    <div class="profile-used">used</div>
+    <iframe id="cross" src="@@CROSS_ORIGIN@@/profile-child"></iframe>
+    <script>
+      // A message from the cross-site iframe runs page JS without timers (background tabs throttle them).
+      window.addEventListener('message', () => window.profileFixture.hot(20));
+    </script>
+  </body>
+</html>

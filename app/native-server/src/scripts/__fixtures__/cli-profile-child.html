@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      .child-used {
+        color: red;
+      }
+      .child-unused {
+        color: blue;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="child-used">child</div>
+    <script>
+      function profileChildHot(ms) {
+        const end = performance.now() + ms;
+        let total = 0;
+        while (performance.now() < end) total += 1;
+        return total;
+      }
+    </script>
+  </body>
+</html>

@@ -34,6 +34,13 @@ import {
   trackNetworkEvent,
   type NetworkState,
 } from '@/utils/cdp-network';
+import {
+  createProfileState,
+  endProfile,
+  stopProfile,
+  trackProfileEvent,
+  type ProfileState,
+} from '@/utils/cdp-profile';
 
 /**
  * Long-lived debugger sessions owned by one named CLI task.
@@ -86,6 +93,7 @@ export interface HeldSession {
   inject: InjectState;
   childStart: ChildStartState;
   network: NetworkState;
+  profile: ProfileState;
   ended?: { at: number; reason: string };
 }
 
@@ -184,6 +192,8 @@ function handleEvent(source: chrome.debugger.DebuggerSession, method: string, pa
   trackScriptEvent(session, method, params, source.sessionId);
   trackNetworkEvent(session, method, params, source.sessionId);
   trackDebugEvent(session, method, params, source.sessionId);
+  // Trace data of a CPU profile is collected there and never buffered.
+  if (trackProfileEvent(session, method, params, source.sessionId) === 'consumed') return;
   // Hook records are buffered whatever the filter; the raw binding call never is.
   const hook = trackInjectEvent(session, method, params, source.sessionId);
   if (hook === 'consumed') return;
@@ -217,6 +227,7 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string) {
   clearInjectState(session.inject);
   clearChildStartState(session.childStart);
   endNetwork(session.network);
+  endProfile(session);
   pruneEnded();
 }
 
@@ -225,7 +236,11 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string) {
 function handleTabRemoved(tabId: number) {
   const session = sessions.get(tabId);
   // A pending wait returns CDP_SESSION_ENDED instead of running into its timeout.
-  if (session) clearDebugState(session.debug);
+  if (session) {
+    clearDebugState(session.debug);
+    // Releases the browser-wide tracing lock of a profile that was recording.
+    endProfile(session);
+  }
   sessions.delete(tabId);
 }
 
@@ -300,6 +315,7 @@ export async function startSession(
     inject: createInjectState(),
     childStart: createChildStartState(),
     network: createNetworkState(),
+    profile: createProfileState(),
   };
   // Register before auto-attach: Target.attachedToTarget arrives before the command resolves.
   sessions.set(tabId, session);
@@ -329,6 +345,7 @@ export async function stopSession(tabId: number, owner: string): Promise<string[
     // Resume before Debugger.disable so a paused page is never left frozen.
     errors.push(...(await releaseDebugger(session)));
     errors.push(...(await stopNetwork(session)).map((error) => `disable network: ${error}`));
+    errors.push(...(await stopProfile(session)).map((error) => `stop profile: ${error}`));
     try {
       await disableScriptDebugger(session);
     } catch (error) {

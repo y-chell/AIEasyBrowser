@@ -454,8 +454,11 @@ function harFilename(tabId: number, requested: string | undefined): string {
   return `network_tab${tabId}_${new Date().toISOString().replace(/[:.]/g, '-')}.har`;
 }
 
-/** Writes through chrome.downloads and waits until the file is complete on disk. */
-async function saveDownload(text: string, filename: string) {
+/**
+ * Writes into the Downloads folder through chrome.downloads (same name is numbered) and waits
+ * until the file is complete on disk. Shared by HAR and chrome_cdp_profile output.
+ */
+export async function saveDownload(text: string, filename: string, code = 'HAR_WRITE_FAILED') {
   const bytes = encoder.encode(text);
   const downloadId = await chrome.downloads.download({
     // application/json would make Chrome rename the file to .json.
@@ -469,10 +472,10 @@ async function saveDownload(text: string, filename: string) {
     const [item] = await chrome.downloads.search({ id: downloadId });
     if (item?.state === 'complete') return { downloadId, path: item.filename, bytes: bytes.length };
     if (item?.state === 'interrupted') {
-      throw new Error(`HAR_WRITE_FAILED: download ${downloadId} was interrupted (${item.error})`);
+      throw new Error(`${code}: download ${downloadId} was interrupted (${item.error})`);
     }
     if (Date.now() > deadline) {
-      throw new Error(`HAR_WRITE_FAILED: download ${downloadId} did not finish in 60 s`);
+      throw new Error(`${code}: download ${downloadId} did not finish in 60 s`);
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }

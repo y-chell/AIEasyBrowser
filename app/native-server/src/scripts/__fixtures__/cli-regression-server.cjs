@@ -21,6 +21,17 @@ const networkChild = fs.readFileSync(path.join(__dirname, 'cli-network-child.htm
 const storageTemplate = fs.readFileSync(path.join(__dirname, 'cli-storage.html'), 'utf8');
 const storageChild = fs.readFileSync(path.join(__dirname, 'cli-storage-child.html'), 'utf8');
 const storageApp = fs.readFileSync(path.join(__dirname, 'cli-storage-app.js'), 'utf8');
+const fixture = (name) => fs.readFileSync(path.join(__dirname, name), 'utf8');
+// One line, so the used and unused lengths in the acceptance are exact.
+const PROFILE_CSS =
+  '.profile-used{font-weight:bold}.profile-unused-a{color:green}.profile-unused-b{margin:3px}';
+const PROFILE_FILES = {
+  '/profile': ['text/html', fixture('cli-profile.html')],
+  '/profile-child': ['text/html', fixture('cli-profile-child.html')],
+  '/profile-app.js': ['text/javascript', fixture('cli-profile-app.js')],
+  '/profile-worker.js': ['text/javascript', fixture('cli-profile-worker.js')],
+  '/profile.css': ['text/css', PROFILE_CSS],
+};
 
 // One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
 function scriptsBundle() {
@@ -119,6 +130,20 @@ const server = http.createServer((request, response) => {
       'Cache-Control': 'no-store',
     });
     response.end(storageApp);
+    return;
+  }
+  const profileFile =
+    request.method === 'GET' && Object.hasOwn(PROFILE_FILES, url.pathname)
+      ? PROFILE_FILES[url.pathname]
+      : undefined;
+  if (profileFile) {
+    response.writeHead(200, {
+      'Content-Type': profileFile[0] + '; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(
+      profileFile[1].replaceAll('@@CROSS_ORIGIN@@', 'http://localhost:' + server.address().port),
+    );
     return;
   }
   if (request.method === 'GET' && url.pathname === '/net-child') {

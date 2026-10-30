@@ -48,14 +48,14 @@ CLI 直接发送本机 JSON 请求，不需要协议握手或预加载完整工�
 
 ## 能做什么
 
-| 能力           | 典型操作                                                             |
-| -------------- | -------------------------------------------------------------------- |
-| 页面读取与定位 | 提取网页内容、扫描交互元素、读取无障碍树、查询 DOM、获取元素 HTML    |
-| 页面交互       | 点击、填写、选择、键盘输入、滚动、拖拽、综合鼠标操作                 |
-| 状态等待与验证 | 等待元素和文本变化、URL 变化、网络活动、新标签页和下载；断言预期状态 |
-| 浏览器管理     | 使用已有标签页和窗口、标签组、页面 frame、历史记录、书签和剪贴板     |
-| 文件与对话框   | 上传文件、查询上传状态、处理下载、处理网页对话框                     |
-| 调试与观测     | 截图、JavaScript、CDP、console、网络请求与抓包、存储、性能 trace     |
+| 能力           | 典型操作                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------- |
+| 页面读取与定位 | 提取网页内容、扫描交互元素、读取无障碍树、查询 DOM、获取元素 HTML                                     |
+| 页面交互       | 点击、填写、选择、键盘输入、滚动、拖拽、综合鼠标操作                                                  |
+| 状态等待与验证 | 等待元素和文本变化、URL 变化、网络活动、新标签页和下载；断言预期状态                                  |
+| 浏览器管理     | 使用已有标签页和窗口、标签组、页面 frame、历史记录、书签和剪贴板                                      |
+| 文件与对话框   | 上传文件、查询上传状态、处理下载、处理网页对话框                                                      |
+| 调试与观测     | 截图、JavaScript、CDP、console、网络请求与抓包、存储、性能 trace、CPU profile、CSS 覆盖率、堆实例计数 |
 
 适合读取已登录后台的数据、操作网页表单、跨标签页整理信息、验证网页流程，以及排查前端页面和网络问题。
 
@@ -298,6 +298,19 @@ aieasybrowser --session re call chrome_cdp_storage '{"action":"cacheEntries","or
 
 `origins` 列出顶层和已附着跨站 iframe 的 http(s) origin 及其 storage key；存储类 action 的 `origin` 必须是其中之一，否则报 `STORAGE_ORIGIN_NOT_FOUND`，同一 origin 在标签里有多个分区时报 `STORAGE_ORIGIN_AMBIGUOUS`。cookie 走根会话的 CDP Network 域：`cookies` 给出 Chrome 会发给 `url` 的 cookie（省略 `url` 时为标签内所有 frame），包括 httpOnly 和分区 cookie（CHIPS，带 `partitionKey`）；`setCookie` 的 `url` 必须属于标签内某个 frame，`domain` 必须覆盖 url 的主机，分区 cookie 需要 `secure:true`，写入后回读确认，Chrome 拒绝时报 `COOKIE_REJECTED`；`deleteCookie` 默认只删未分区的同名 cookie，删分区 cookie 要按 `cookies` 列出的值传 `partitionKey`，可再用 `domain`、`path` 收窄，删后回读确认。`items` 按 key 排序分页读取一个 origin 的 `local` 或 `session` 区（可按 `key` 或 `prefix` 过滤），`setItem`、`removeItem`、`clearItems` 只改这一个 origin 和区。`databases` 列出 IndexedDB 库、对象仓库、keyPath、条数和索引；`readStore` 按仓库或索引分页读取，`range` 为 `only` 或 `lower`/`upper`（配 `lowerOpen`/`upperOpen`），`direction:"prev"` 倒序；IndexedDB 只读。`caches` 列出 Cache Storage，`cacheEntries` 分页列出某个 cache 的请求（`pathFilter` 子串过滤），`cacheResponse` 返回某个 url 的缓存响应体（文本按字符，二进制按字节给 base64）。Chrome 不向扩展开放 DOMStorage 和 IndexedDB 域，这两类在该 frame 的隔离 world 里调用页面 API，页面改写不影响结果；该 frame 被调试器暂停时，存储、IndexedDB 和 Cache Storage 调用报 `STORAGE_PAGE_PAUSED`，cookie 不受影响。cookie 值、敏感名下的存储值和内嵌 token 默认脱敏，`sanitizeOutput:false` 给原值。跨站 iframe 内再嵌套的 iframe 不覆盖。
 
+`chrome_cdp_profile` 在同一会话里做 CSS 覆盖率、CPU profile 和堆实例计数：
+
+```bash
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cssStart"}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cssStop"}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cpuStart"}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"cpuStop","top":20}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"heapSample","constructors":["Map","app.models.User"]}'
+aieasybrowser --session re call chrome_cdp_profile '{"action":"heapDiff","from":1,"to":2}'
+```
+
+Chrome 不向扩展开放 Profiler 和 HeapProfiler 域，所以没有 JS 覆盖率和 heap snapshot。`cssStart` 在标签和已附着的跨站 iframe 里跟踪 CSS 规则使用（worker 没有 CSS）；`cssReport` 合并到目前为止用到的规则，按未用量从多到少列出每个样式表的已用和未用字符数（UTF-16 字符，未用部分含空白和注释），可按 `url`、`sessionId` 过滤并分页；`cssStop` 结束跟踪并返回最终结果，之后 `cssReport` 仍可读。`cpuStart`/`cpuStop` 通过 Chrome tracing 采样，间隔约 0.5 ms，不能调整；整个浏览器同时只能有一个 trace，与 `performance_start_trace` 互斥，冲突时报 `TRACE_BUSY`。`cpuStop` 为每个有采样的线程（页面、跨站 iframe、dedicated worker）在下载目录写一个 `.cpuprofile`（DevTools 可直接打开），返回路径和按自身耗时排序的热点函数（函数名、url、0 基行列、scriptId）；scriptId 属于该 profile 的 `sessionId`，可直接交给 `chrome_cdp_scripts source`。`heapUsage` 给出页面和各子会话的 JS 堆大小；`heapSample` 按全局构造器路径数存活实例（按原型链，含子类），保留最近 20 个样本；`heapDiff` 对比同一会话的两个样本，给出各构造器的前后数量和差值以及堆大小变化，没有 self size。计数会先 GC 再遍历整个堆，页面每个构造器冻结约 0.5–1 秒，该会话被调试器暂停时报 `PROFILE_PAGE_PAUSED`。重复 `cssStart`/`cpuStart` 报 `CSS_COVERAGE_ACTIVE`/`CPU_PROFILE_ACTIVE`；会话 `stop` 结束跟踪并丢弃未停止的 CPU 采样。url 和函数名里的内嵌 token 默认脱敏（`.cpuprofile` 文件里也是）。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -321,7 +334,7 @@ codex mcp remove aieasybrowser
 
 ## 连接检查与诊断
 
-运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 45。
+运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 46。
 
 安装或启动异常时，在源码根目录执行诊断命令：
 
@@ -360,6 +373,7 @@ pnpm test:cli-cdp-contexts
 pnpm test:cli-cdp-inject
 pnpm test:cli-cdp-network
 pnpm test:cli-cdp-storage
+pnpm test:cli-cdp-profile
 pnpm run build
 ```
 
@@ -394,6 +408,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-network` 要求已重载包含 `chrome_cdp_network` 的扩展。临时网页含跨站 iframe，并提供 JSON、二进制、2.1 MB 中文文本、SSE 和 WebSocket 回显接口。脚本验证以下内容：未 start 时被拒；JSON 请求的线上头默认脱敏，`auth` 只给名字，`sanitizeOutput:false` 时给原值；请求体和响应体与页面看到的一致；二进制按字节取 base64；大文本按整字截到 1 MB 并分页；跨站 iframe 的请求带子会话 sessionId；SSE 和 WebSocket 消息逐条记录；事件缓冲里没有 Network 事件；重载后旧 body 仍可读，重建的跨站 iframe 在新子会话里继续记录。HAR 默认不含凭据，raw 模式保留凭据，文件大小与返回值一致。脚本还验证：其他任务、未知 seq、非流请求读消息、重复 start、非法文件名、未知 action 和 `needResponseBody` 被拒；`stop` 后不再记录；会话 `stop` 后无调试附着；webRequest 抓包仍能抓到请求。拦截部分验证：continue 改头和请求体后服务端收到改动；fulfill 返回 418、fail 得到 `net::ERR_BLOCKED_BY_CLIENT.Inspector`、响应阶段 fulfill 返回 203；跨站 iframe 和 dedicated worker 的请求被命中并关联到各自的行；unintercept、Network `stop`、会话 `stop` 后规则不再生效。重放部分验证：显式 body 和自定义头送达服务端，新行带 `replayOf`、原行列出 `replays`、带上页面 cookie；`useOriginalBody` 发出的请求体与原请求一致；跨站 iframe 行在其子会话重放，worker 行在 worker 内重放并关联到新行；缺 body、响应阶段改请求、未知规则 id 被拒。结束删除 HAR 文件、关闭标签、忘记任务并退出临时服务。
 
 `pnpm test:cli-cdp-storage` 要求已重载包含 `chrome_cdp_storage` 的扩展。临时网页（127.0.0.1）含一个跨站 iframe（localhost），两者各自建立 IndexedDB 库和 Cache Storage。测试写入的 cookie、key、库和 cache 都以本轮随机前缀命名，脚本只读写和删除这些数据；127.0.0.1 和 localhost 的 cookie 不按端口隔离，断言只看本轮名字，不看完整列表。脚本验证：未 start 时被拒；`origins` 给出顶层和跨站 iframe（含子会话和分区 storage key）；httpOnly cookie 页面看不到但能列出，跨站 iframe 的分区 cookie 与页面自己写的分区 cookie 带 `partitionKey` 列出；cookie 值默认脱敏；SameSite=None 缺 Secure、domain 不覆盖主机、url 不在标签内、过去的过期时间被拒；不带 `partitionKey` 删分区 cookie 报 `COOKIE_NOT_FOUND`，带上后删除并从页面消失。local/sessionStorage 按 origin 分开写入并被页面看到，敏感 key 和 JSON 里的敏感字段默认脱敏，超长值截断并给出原长度，分页、重复删除、标签外 origin、非 origin 字符串、多余参数和未知 action 被拒，`clearItems` 只清一个区。IndexedDB 列出库结构和条数，按主键分页、区间加倒序、按索引读取，二进制和 Date 按类型返回，敏感字段默认脱敏；不存在的库、仓库、索引和非法区间被拒，读不存在的库不会建库。Cache Storage 列出条目、按路径过滤、读取 JSON（内嵌 token 脱敏）和二进制响应，跨站 iframe 的 cache 在其子会话读取；不存在的 cache 和条目被拒。顶层被调试器暂停时存储、IndexedDB、Cache Storage 调用报 `STORAGE_PAGE_PAUSED`，cookie 和跨站 iframe 照常可读。其他任务访问被拒。结束删除本轮 cookie、库、cache 和 key 并核对为空，关闭标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-cdp-profile` 要求已重载包含 `chrome_cdp_profile` 的扩展。临时网页（127.0.0.1）含跨站 iframe（localhost）和 dedicated worker，只对本轮打开的标签采集。脚本验证：未 start 时被拒；`profile.css` 的总长、已用和未用字符数与样式表文本逐字一致，页面新加一个元素后下一次报告合并了新用到的规则，跨站 iframe 的内联样式表在其子会话列出；页面、跨站 iframe、worker 各自跑一段忙循环后，每个线程一个 `.cpuprofile`，热点函数、0 基行号和 scriptId 与 `chrome_cdp_scripts` 在同一会话里列出的一致，url 里的 token 在输出和文件里都已脱敏；两次堆样本之间新建 1000 个实例，`heapDiff` 给出 +1000，未变的构造器为 0；不存在的构造器、跨会话对比、未知样本、未知会话被拒；顶层暂停时 `heapSample` 报 `PROFILE_PAGE_PAUSED`，CSS、tracing 和 worker 照常；重复 start 和其他任务被拒；会话 `stop` 结束 trace 和 CSS 跟踪并释放浏览器 trace 锁。结束删除本轮 `.cpuprofile` 文件、关闭标签、忘记任务并退出临时服务。
 
 ## 许可证
 

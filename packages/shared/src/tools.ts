@@ -35,6 +35,7 @@ export const TOOL_NAMES = {
     CDP_INJECT: 'chrome_cdp_inject',
     CDP_NETWORK: 'chrome_cdp_network',
     CDP_STORAGE: 'chrome_cdp_storage',
+    CDP_PROFILE: 'chrome_cdp_profile',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -140,7 +141,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.PERFORMANCE_START_TRACE,
     description:
-      'Starts a performance trace recording on the selected page. Optionally reloads the page and/or auto-stops after a short duration.',
+      'Starts a performance trace recording on the selected page. Optionally reloads the page and/or auto-stops after a short duration. Chrome runs one trace in the whole browser: while chrome_cdp_profile cpuStart records, this fails with TRACE_BUSY. For a CPU profile with hot functions per thread of a held session, use chrome_cdp_profile.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2286,6 +2287,79 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'boolean',
           description:
             'Redact cookie values and sensitive storage values and embedded tokens (default true).',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_PROFILE,
+    description:
+      'CSS coverage, CPU profile, and heap instance counts of a tab held by chrome_cdp_session (start it first; its stop ends everything). Chrome does not give extensions the Profiler or HeapProfiler domains, so there is no JavaScript coverage and no heap snapshot. cssStart tracks CSS rule usage in the tab and every attached cross-site iframe (style sheets come from CSS.styleSheetAdded); cssReport returns used and unused text per style sheet, most unused first, in UTF-16 chars (filter by url substring or sessionId, page with offset/limit); cssStop ends tracking and returns the final report, which cssReport can still read. cpuStart records a CPU profile through Chrome tracing (about 0.5 ms sampling, not configurable; one trace in the whole browser, shared with performance_start_trace, else TRACE_BUSY). cpuStop writes one .cpuprofile per sampled thread (page, cross-site iframe, dedicated worker) into the Downloads folder and returns each path with the top functions by self time (functionName, url, 0-based lineNumber/columnNumber, scriptId in the sessionId of that thread, as in chrome_cdp_scripts). heapUsage reports used/total JS heap of the page and every child session. heapSample counts live instances of each global constructor path (prototype chain, subclasses included) in the page or a child sessionId and keeps the last 20 samples; counting collects garbage and walks the whole heap, which blocks that page for about 0.5-1 s even for few objects (each count reports its ms), so sample sparingly; it fails with PROFILE_PAGE_PAUSED while that session is paused. heapDiff compares two samples of the same session per constructor (count before, after, delta; no self size) and the heap size change. A second cssStart or cpuStart fails with CSS_COVERAGE_ACTIVE or CPU_PROFILE_ACTIVE. url and function names are redacted for embedded tokens unless sanitizeOutput is false.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: [
+            'status',
+            'cssStart',
+            'cssReport',
+            'cssStop',
+            'cpuStart',
+            'cpuStop',
+            'heapUsage',
+            'heapSample',
+            'heapDiff',
+          ],
+          description:
+            'status | cssStart | cssReport | cssStop | cpuStart | cpuStop | heapUsage | heapSample | heapDiff. Each action rejects parameters it does not use.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        sessionId: {
+          type: 'string',
+          description:
+            'cssReport, cssStop: only style sheets of this child session ("root" = the page). heapSample: child session from chrome_cdp_session status (omit or "root" = the page).',
+        },
+        url: {
+          type: 'string',
+          description: 'cssReport, cssStop: only style sheets whose url contains this.',
+        },
+        constructors: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'heapSample: 1-20 global constructor paths, e.g. ["Map", "app.models.User"].',
+        },
+        from: { type: 'number', description: 'heapDiff: earlier sample id from heapSample.' },
+        to: { type: 'number', description: 'heapDiff: later sample id from heapSample.' },
+        top: {
+          type: 'number',
+          description: 'cpuStop: functions per profile by self time (default 20, max 200).',
+        },
+        offset: {
+          type: 'number',
+          description: 'cssReport, cssStop: sheets to skip (use nextOffset).',
+        },
+        limit: {
+          type: 'number',
+          description: 'cssReport, cssStop: sheets per page (default 50, max 500).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'Maximum output bytes (default 51200); a sheet page ends early.',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact embedded tokens in urls and function names, also in .cpuprofile files (default true).',
         },
       },
       required: ['action'],
