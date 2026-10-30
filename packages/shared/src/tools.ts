@@ -34,6 +34,7 @@ export const TOOL_NAMES = {
     CDP_DEBUGGER: 'chrome_cdp_debugger',
     CDP_INJECT: 'chrome_cdp_inject',
     CDP_NETWORK: 'chrome_cdp_network',
+    CDP_STORAGE: 'chrome_cdp_storage',
     CONSOLE: 'chrome_console',
     COLLECT_DEBUG_EVIDENCE: 'chrome_collect_debug_evidence',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -2118,6 +2119,173 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
             },
           },
           required: ['method'],
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.CDP_STORAGE,
+    description:
+      'Cookies, localStorage/sessionStorage, IndexedDB, and Cache Storage of a tab held by chrome_cdp_session (start it first). Every call names one target; there is no operation across sites. origins lists the http(s) origins of the tab (top frame and attached cross-site iframes) with their storage key; storage actions take one of them as origin and fail with STORAGE_ORIGIN_NOT_FOUND or STORAGE_ORIGIN_AMBIGUOUS otherwise. cookies lists the cookies Chrome would send to url (or of every frame of the tab when url is omitted), including httpOnly and partitioned (CHIPS) cookies with their partitionKey; setCookie sets one cookie for url, a url of the tab (domain must cover its host; partitioned cookies need secure:true) and reads it back; deleteCookie deletes the cookies named name for url, unpartitioned only unless partitionKey is given (pass it as listed), narrowed by domain and path, and verifies they are gone. items pages keys and values of one area of origin (filter by exact key or prefix); setItem, removeItem, and clearItems change only that origin and area. databases lists IndexedDB databases with stores, key paths, counts, and indexes; readStore pages records of one store or index (range: only, or lower/upper with lowerOpen/upperOpen; direction prev for newest keys first); IndexedDB is read-only. caches lists Cache Storage names, cacheEntries pages the requests in one cache (pathFilter substring), and cacheResponse returns the cached response body of url (text by chars, binary as base64 by bytes). Values are read in an isolated world the page cannot patch; storage, IndexedDB, and Cache Storage actions fail with STORAGE_PAGE_PAUSED while that frame is paused in the debugger (cookies still work). Cookie values are redacted, and storage values under sensitive names or holding tokens are redacted, unless sanitizeOutput is false. Iframes nested inside a cross-site iframe are not covered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: [
+            'origins',
+            'cookies',
+            'setCookie',
+            'deleteCookie',
+            'items',
+            'setItem',
+            'removeItem',
+            'clearItems',
+            'databases',
+            'readStore',
+            'caches',
+            'cacheEntries',
+            'cacheResponse',
+          ],
+          description:
+            'origins | cookies | setCookie | deleteCookie | items | setItem | removeItem | clearItems | databases | readStore | caches | cacheEntries | cacheResponse. Each action rejects parameters it does not use.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target tab ID. If omitted, uses the current active tab.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Target window ID to pick active tab when tabId is omitted.',
+        },
+        origin: {
+          type: 'string',
+          description:
+            'Storage, IndexedDB, and cache actions: origin from origins, e.g. "https://example.com".',
+        },
+        area: {
+          type: 'string',
+          enum: ['local', 'session'],
+          description: 'items, setItem, removeItem, clearItems: localStorage or sessionStorage.',
+        },
+        key: {
+          type: 'string',
+          description: 'items: only this key. setItem, removeItem: the key.',
+        },
+        prefix: { type: 'string', description: 'items: keys starting with this.' },
+        value: {
+          type: 'string',
+          description: 'setItem: value to store. setCookie: cookie value.',
+        },
+        name: {
+          type: 'string',
+          description: 'cookies: only this name. setCookie, deleteCookie: cookie name.',
+        },
+        url: {
+          type: 'string',
+          description:
+            'cookies, setCookie, deleteCookie: absolute url of a frame origin in the tab. cacheResponse: request url of the entry.',
+        },
+        domain: {
+          type: 'string',
+          description:
+            'setCookie: cookie domain covering the url host (omit for a host-only cookie). deleteCookie: only this domain.',
+        },
+        path: {
+          type: 'string',
+          description: 'setCookie: cookie path (default from url). deleteCookie: only this path.',
+        },
+        secure: { type: 'boolean', description: 'setCookie: Secure attribute.' },
+        httpOnly: { type: 'boolean', description: 'setCookie: HttpOnly attribute.' },
+        sameSite: {
+          type: 'string',
+          enum: ['Strict', 'Lax', 'None'],
+          description: 'setCookie: SameSite attribute (None needs secure:true).',
+        },
+        expires: {
+          type: 'number',
+          description:
+            'setCookie: future expiry in seconds since the epoch (omit for a session cookie).',
+        },
+        partitionKey: {
+          type: 'object',
+          description:
+            'setCookie, deleteCookie: CHIPS partition as listed by cookies; setCookie needs secure:true with it.',
+          properties: {
+            topLevelSite: {
+              type: 'string',
+              description:
+                'Scheme and registrable host of the top-level site, e.g. "https://a.com".',
+            },
+            hasCrossSiteAncestor: {
+              type: 'boolean',
+              description: 'Whether the cookie was set in a cross-site context.',
+            },
+          },
+          required: ['topLevelSite', 'hasCrossSiteAncestor'],
+        },
+        database: { type: 'string', description: 'readStore: IndexedDB database name.' },
+        store: { type: 'string', description: 'readStore: object store name.' },
+        index: { type: 'string', description: 'readStore: read through this index of the store.' },
+        range: {
+          type: 'object',
+          description:
+            'readStore: key range on the store or index. Keys are strings, numbers, or arrays of keys.',
+          properties: {
+            only: {
+              oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'array' }],
+              description: 'Exactly this key; not combined with bounds.',
+            },
+            lower: {
+              oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'array' }],
+              description: 'Lower bound.',
+            },
+            upper: {
+              oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'array' }],
+              description: 'Upper bound.',
+            },
+            lowerOpen: { type: 'boolean', description: 'Exclude the lower bound.' },
+            upperOpen: { type: 'boolean', description: 'Exclude the upper bound.' },
+          },
+        },
+        direction: {
+          type: 'string',
+          enum: ['next', 'prev'],
+          description: 'readStore: ascending (default) or descending key order.',
+        },
+        cache: {
+          type: 'string',
+          description: 'cacheEntries, cacheResponse: cache name from caches.',
+        },
+        pathFilter: {
+          type: 'string',
+          description: 'cacheEntries: only requests whose url contains this.',
+        },
+        offset: {
+          type: 'number',
+          description:
+            'cookies, items, readStore, cacheEntries: entries to skip (use nextOffset). cacheResponse: body start (chars for text, bytes for base64).',
+        },
+        limit: {
+          type: 'number',
+          description:
+            'Page size: cookies, items (default 100, max 1000), readStore (default 20, max 500), cacheEntries (default 50, max 500).',
+        },
+        length: {
+          type: 'number',
+          description:
+            'cacheResponse: chars or bytes to return (default as much as maxOutputBytes allows).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description:
+            'Maximum output bytes (default 51200); long values are cut and pages end early.',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact cookie values and sensitive storage values and embedded tokens (default true).',
         },
       },
       required: ['action'],

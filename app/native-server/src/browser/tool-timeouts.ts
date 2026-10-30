@@ -35,6 +35,7 @@ const FAST_TOOLS = new Set([
   'chrome_cdp_session',
   'chrome_cdp_debugger',
   'chrome_cdp_inject',
+  'chrome_cdp_storage',
 ]);
 
 const MEDIUM_TOOLS = new Set(['chrome_navigate', 'chrome_screenshot']);

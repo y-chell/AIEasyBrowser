@@ -55,7 +55,7 @@ CLI 直接发送本机 JSON 请求，不需要协议握手或预加载完整工�
 | 状态等待与验证 | 等待元素和文本变化、URL 变化、网络活动、新标签页和下载；断言预期状态 |
 | 浏览器管理     | 使用已有标签页和窗口、标签组、页面 frame、历史记录、书签和剪贴板     |
 | 文件与对话框   | 上传文件、查询上传状态、处理下载、处理网页对话框                     |
-| 调试与观测     | 截图、JavaScript、CDP、console、网络请求与抓包、性能 trace           |
+| 调试与观测     | 截图、JavaScript、CDP、console、网络请求与抓包、存储、性能 trace     |
 
 适合读取已登录后台的数据、操作网页表单、跨标签页整理信息、验证网页流程，以及排查前端页面和网络问题。
 
@@ -285,6 +285,19 @@ aieasybrowser --session re call chrome_cdp_network '{"action":"replay","seq":12,
 
 规则按 `urlPattern`（`*` 和 `?` 通配）、可选 `resourceTypes` 和 `stage`（默认 `request`，可选 `response`）匹配，第一条命中的规则生效。动作有 `continue`（仅请求阶段可改 `url`、`method`、`headers`、`removeHeaders`、`postData`）、`fulfill`（`status`、`headers`、`body` 或 `bodyBase64`）、`fail`（`errorReason`）和 `log`。每个暂停的请求都立即应答，页面不会等待 Agent；规则执行出错时原样放行。`Fetch.enable` 在根会话、跨站 iframe 和 service worker 子会话分别启用，dedicated worker 没有 Fetch 域，它的请求在所属页面会话暂停。命中的行带 `intercepted`（`ruleId:action`），`get` 的 `intercepts` 列出改了什么；`rules` 返回规则、命中数、已启用的会话和最近 50 次暂停。`unintercept` 接受规则 id 或 `all`，之后 `Fetch.disable`，仍暂停的请求随之放行；Network `stop` 和会话 `stop` 同样移除全部规则。`replay` 必须显式给 `method`，非 GET/HEAD 必须给 `body` 或 `useOriginalBody:true` 二选一，不会默认沿用原请求。请求在发出该行的 frame 的隔离 world（worker 行在 worker 内）用 `fetch` 发送，带页面 cookie、Origin、Referer，页面改写的 `fetch` 不影响它；Cookie、Origin、`Sec-*` 等禁止头会被丢弃并在结果里列出。新行带 `replayOf`，原行列出 `replays`。该上下文被调试器暂停时拒绝重放。
 
+`chrome_cdp_storage` 在同一会话里读写标签内各 origin 的存储，每次调用只作用于一个 origin、一个 key 或一个 cookie，没有跨站清空：
+
+```bash
+aieasybrowser --session re call chrome_cdp_storage '{"action":"origins"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"cookies","url":"https://example.com/"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"items","origin":"https://example.com","area":"local","prefix":"app_"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"databases","origin":"https://example.com"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"readStore","origin":"https://example.com","database":"app","store":"messages","range":{"lower":100},"limit":20}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"cacheEntries","origin":"https://example.com","cache":"v1"}'
+```
+
+`origins` 列出顶层和已附着跨站 iframe 的 http(s) origin 及其 storage key；存储类 action 的 `origin` 必须是其中之一，否则报 `STORAGE_ORIGIN_NOT_FOUND`，同一 origin 在标签里有多个分区时报 `STORAGE_ORIGIN_AMBIGUOUS`。cookie 走根会话的 CDP Network 域：`cookies` 给出 Chrome 会发给 `url` 的 cookie（省略 `url` 时为标签内所有 frame），包括 httpOnly 和分区 cookie（CHIPS，带 `partitionKey`）；`setCookie` 的 `url` 必须属于标签内某个 frame，`domain` 必须覆盖 url 的主机，分区 cookie 需要 `secure:true`，写入后回读确认，Chrome 拒绝时报 `COOKIE_REJECTED`；`deleteCookie` 默认只删未分区的同名 cookie，删分区 cookie 要按 `cookies` 列出的值传 `partitionKey`，可再用 `domain`、`path` 收窄，删后回读确认。`items` 按 key 排序分页读取一个 origin 的 `local` 或 `session` 区（可按 `key` 或 `prefix` 过滤），`setItem`、`removeItem`、`clearItems` 只改这一个 origin 和区。`databases` 列出 IndexedDB 库、对象仓库、keyPath、条数和索引；`readStore` 按仓库或索引分页读取，`range` 为 `only` 或 `lower`/`upper`（配 `lowerOpen`/`upperOpen`），`direction:"prev"` 倒序；IndexedDB 只读。`caches` 列出 Cache Storage，`cacheEntries` 分页列出某个 cache 的请求（`pathFilter` 子串过滤），`cacheResponse` 返回某个 url 的缓存响应体（文本按字符，二进制按字节给 base64）。Chrome 不向扩展开放 DOMStorage 和 IndexedDB 域，这两类在该 frame 的隔离 world 里调用页面 API，页面改写不影响结果；该 frame 被调试器暂停时，存储、IndexedDB 和 Cache Storage 调用报 `STORAGE_PAGE_PAUSED`，cookie 不受影响。cookie 值、敏感名下的存储值和内嵌 token 默认脱敏，`sanitizeOutput:false` 给原值。跨站 iframe 内再嵌套的 iframe 不覆盖。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -308,7 +321,7 @@ codex mcp remove aieasybrowser
 
 ## 连接检查与诊断
 
-运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 42。
+运行 `aieasybrowser health`，核对扩展名称为 `AIEasyBrowser`、扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`，以及 `nativeHost.serverStatus.isRunning` 为 `true`。`schema.toolCount` 表示扩展支持的完整浏览器能力数，当前为 45。
 
 安装或启动异常时，在源码根目录执行诊断命令：
 
@@ -345,6 +358,8 @@ pnpm test:cli-cdp-scripts
 pnpm test:cli-cdp-debugger
 pnpm test:cli-cdp-contexts
 pnpm test:cli-cdp-inject
+pnpm test:cli-cdp-network
+pnpm test:cli-cdp-storage
 pnpm run build
 ```
 
@@ -377,6 +392,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-inject` 要求已重载包含 `chrome_cdp_inject` 的扩展。临时网页含同站 iframe、跨站 iframe 及其嵌套 iframe，签名对象在 DOMContentLoaded 中才创建。脚本验证：未 start 时被拒；注册主世界与命名 world 脚本、函数/属性/fetch/XHR hook 后重载，顶层第一个页面脚本前已执行，命名 world 全局与主世界隔离，各 frame（含重建后的跨站 iframe 新子会话）都执行并产生记录；函数 hook 在 DOMContentLoaded 后安装，调用记录含参数、返回值和调用栈，fetch/XHR 记录头名不含头值；`maxRecords` 生效；remove 后记录被丢弃、重载后不再安装；其他任务、非法路径、未知 id 和未知 hook 类型被拒；`stop` 后无调试附着，下次加载不再注入，跨站 iframe 正常加载。结束关闭测试标签与辅助标签、忘记任务并退出临时服务。
 
 `pnpm test:cli-cdp-network` 要求已重载包含 `chrome_cdp_network` 的扩展。临时网页含跨站 iframe，并提供 JSON、二进制、2.1 MB 中文文本、SSE 和 WebSocket 回显接口。脚本验证以下内容：未 start 时被拒；JSON 请求的线上头默认脱敏，`auth` 只给名字，`sanitizeOutput:false` 时给原值；请求体和响应体与页面看到的一致；二进制按字节取 base64；大文本按整字截到 1 MB 并分页；跨站 iframe 的请求带子会话 sessionId；SSE 和 WebSocket 消息逐条记录；事件缓冲里没有 Network 事件；重载后旧 body 仍可读，重建的跨站 iframe 在新子会话里继续记录。HAR 默认不含凭据，raw 模式保留凭据，文件大小与返回值一致。脚本还验证：其他任务、未知 seq、非流请求读消息、重复 start、非法文件名、未知 action 和 `needResponseBody` 被拒；`stop` 后不再记录；会话 `stop` 后无调试附着；webRequest 抓包仍能抓到请求。拦截部分验证：continue 改头和请求体后服务端收到改动；fulfill 返回 418、fail 得到 `net::ERR_BLOCKED_BY_CLIENT.Inspector`、响应阶段 fulfill 返回 203；跨站 iframe 和 dedicated worker 的请求被命中并关联到各自的行；unintercept、Network `stop`、会话 `stop` 后规则不再生效。重放部分验证：显式 body 和自定义头送达服务端，新行带 `replayOf`、原行列出 `replays`、带上页面 cookie；`useOriginalBody` 发出的请求体与原请求一致；跨站 iframe 行在其子会话重放，worker 行在 worker 内重放并关联到新行；缺 body、响应阶段改请求、未知规则 id 被拒。结束删除 HAR 文件、关闭标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-cdp-storage` 要求已重载包含 `chrome_cdp_storage` 的扩展。临时网页（127.0.0.1）含一个跨站 iframe（localhost），两者各自建立 IndexedDB 库和 Cache Storage。测试写入的 cookie、key、库和 cache 都以本轮随机前缀命名，脚本只读写和删除这些数据；127.0.0.1 和 localhost 的 cookie 不按端口隔离，断言只看本轮名字，不看完整列表。脚本验证：未 start 时被拒；`origins` 给出顶层和跨站 iframe（含子会话和分区 storage key）；httpOnly cookie 页面看不到但能列出，跨站 iframe 的分区 cookie 与页面自己写的分区 cookie 带 `partitionKey` 列出；cookie 值默认脱敏；SameSite=None 缺 Secure、domain 不覆盖主机、url 不在标签内、过去的过期时间被拒；不带 `partitionKey` 删分区 cookie 报 `COOKIE_NOT_FOUND`，带上后删除并从页面消失。local/sessionStorage 按 origin 分开写入并被页面看到，敏感 key 和 JSON 里的敏感字段默认脱敏，超长值截断并给出原长度，分页、重复删除、标签外 origin、非 origin 字符串、多余参数和未知 action 被拒，`clearItems` 只清一个区。IndexedDB 列出库结构和条数，按主键分页、区间加倒序、按索引读取，二进制和 Date 按类型返回，敏感字段默认脱敏；不存在的库、仓库、索引和非法区间被拒，读不存在的库不会建库。Cache Storage 列出条目、按路径过滤、读取 JSON（内嵌 token 脱敏）和二进制响应，跨站 iframe 的 cache 在其子会话读取；不存在的 cache 和条目被拒。顶层被调试器暂停时存储、IndexedDB、Cache Storage 调用报 `STORAGE_PAGE_PAUSED`，cookie 和跨站 iframe 照常可读。其他任务访问被拒。结束删除本轮 cookie、库、cache 和 key 并核对为空，关闭标签、忘记任务并退出临时服务。
 
 ## 许可证
 

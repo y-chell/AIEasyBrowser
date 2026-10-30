@@ -21,6 +21,7 @@
     "test:cli-cdp-contexts": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-cdp-contexts.cjs",
     "test:cli-cdp-inject": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-cdp-inject.cjs",
     "test:cli-cdp-network": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-cdp-network.cjs",
+    "test:cli-cdp-storage": "pnpm --filter aieasybrowser-shared build && pnpm run build && node src/scripts/cli-cdp-storage.cjs",
     "lint": "eslint 'src/**/*.{js,ts}'",
     "lint:fix": "eslint 'src/**/*.{js,ts}' --fix",
     "format": "prettier --write 'src/**/*.{js,ts,json}'",

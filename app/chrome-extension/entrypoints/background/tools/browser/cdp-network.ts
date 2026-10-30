@@ -139,14 +139,14 @@ function presentHeaders(headers: Headers, sanitize: boolean): Headers {
   );
 }
 
-function decodeBase64(text: string): Uint8Array {
+export function decodeBase64(text: string): Uint8Array {
   const binary = atob(text);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;
 }
 
-function encodeBase64(bytes: Uint8Array): string {
+export function encodeBase64(bytes: Uint8Array): string {
   let binary = '';
   for (let index = 0; index < bytes.length; index += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
@@ -155,7 +155,7 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 /** Longest prefix of text[start, end) whose UTF-8 size fits maxBytes, as an end offset. */
-function fitBytes(text: string, start: number, end: number, maxBytes: number): number {
+export function fitBytes(text: string, start: number, end: number, maxBytes: number): number {
   let used = 0;
   let index = start;
   while (index < end) {

@@ -288,6 +288,21 @@ aieasybrowser --session re call chrome_cdp_network '{"action":"replay","seq":12,
 - Covered: the tab, cross-site iframes, service workers, and dedicated workers (their requests pause in the parent). Cookie and Origin headers cannot be changed by `continue`.
 - `replay` always needs an explicit `method`. Non-GET/HEAD needs exactly one of `body` or `useOriginalBody:true`. `url`, `headers`, `removeHeaders`, `credentials` (`include` by default), and `timeoutMs` are optional. It runs `fetch` in an isolated world of the frame that sent the row (or in the worker), so page cookies apply and page patches to `fetch` do not. Forbidden headers (Cookie, Origin, `Sec-*`) are dropped and listed. The new row has `replayOf`; the original lists `replays`. Replay refuses while that context is paused in the debugger.
 
+`chrome_cdp_storage` reads and writes storage of the held tab. Every call names one origin, key, or cookie; there is no cross-site clear:
+
+```bash
+aieasybrowser --session re call chrome_cdp_storage '{"action":"origins"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"cookies","url":"https://example.com/"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"items","origin":"https://example.com","area":"local","prefix":"app_"}'
+aieasybrowser --session re call chrome_cdp_storage '{"action":"readStore","origin":"https://example.com","database":"app","store":"messages","range":{"lower":100},"limit":20}'
+```
+
+- Call `origins` first. Storage actions take one of its origins (top frame or attached cross-site iframe) and fail with `STORAGE_ORIGIN_NOT_FOUND`/`STORAGE_ORIGIN_AMBIGUOUS` otherwise. Each action rejects parameters it does not use.
+- `cookies` lists what Chrome sends to `url` (every frame of the tab when omitted), including httpOnly and partitioned cookies with `partitionKey`. `setCookie` needs a `url` of a frame in the tab; `domain` must cover its host; partitioned cookies need `secure:true`; it reads the cookie back and fails with `COOKIE_REJECTED`. `deleteCookie` deletes only the unpartitioned cookie unless you pass `partitionKey` exactly as listed; `COOKIE_NOT_FOUND` names partitions that exist.
+- `items`/`setItem`/`removeItem`/`clearItems` work on one origin and `area` (`local` or `session`). `databases` and `readStore` (store or `index`, `range` `only` or `lower`/`upper` with `lowerOpen`/`upperOpen`, `direction:"prev"`, `offset`/`limit`) are read-only. `caches`, `cacheEntries` (`pathFilter`), and `cacheResponse` (`url`) read Cache Storage. Page with `nextOffset`.
+- Storage, IndexedDB, and Cache Storage fail with `STORAGE_PAGE_PAUSED` while that frame is paused in the debugger; resume first. Cookies still work.
+- Cookie values, values under sensitive names, and embedded tokens are redacted unless `sanitizeOutput:false`. Do not change storage of sites the user did not ask about.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.

@@ -44,6 +44,7 @@ const EXPECTED_TOOLS = [
   'chrome_cdp_debugger',
   'chrome_cdp_inject',
   'chrome_cdp_network',
+  'chrome_cdp_storage',
   'chrome_click_element',
   'chrome_fill_or_select',
   'chrome_keyboard',
@@ -72,6 +73,7 @@ const VALID_REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
   chrome_cdp_debugger: { action: 'status' },
   chrome_cdp_inject: { action: 'list' },
   chrome_cdp_network: { action: 'list' },
+  chrome_cdp_storage: { action: 'origins' },
   chrome_fill_or_select: { value: false },
   chrome_keyboard: { keys: 'Enter' },
   chrome_upload_file: { selector: '#fixture' },
@@ -182,6 +184,23 @@ const INVALID_ARGS: Array<[string, Record<string, unknown>, string]> = [
   ['chrome_cdp_network', { action: 'body', seq: 1, part: 'both' }, 'args/part'],
   ['chrome_cdp_network', { action: 'list', types: 'XHR' }, 'args/types'],
   ['chrome_cdp_network', { action: 'list', state: 'done' }, 'args/state'],
+  ['chrome_cdp_storage', {}, 'args/action'],
+  ['chrome_cdp_storage', { action: 'clearAll' }, 'args/action'],
+  ['chrome_cdp_storage', { action: 'items', area: 'cookie' }, 'args/area'],
+  ['chrome_cdp_storage', { action: 'cookies', cookieUrl: 'x' }, 'args/cookieUrl'],
+  ['chrome_cdp_storage', { action: 'setCookie', sameSite: 'none' }, 'args/sameSite'],
+  [
+    'chrome_cdp_storage',
+    { action: 'deleteCookie', partitionKey: { topLevelSite: 'https://a.test' } },
+    'args/partitionKey/hasCrossSiteAncestor',
+  ],
+  [
+    'chrome_cdp_storage',
+    { action: 'readStore', range: { lower: 1, inclusive: true } },
+    'args/range/inclusive',
+  ],
+  ['chrome_cdp_storage', { action: 'readStore', range: { only: true } }, 'args/range/only'],
+  ['chrome_cdp_storage', { action: 'readStore', direction: 'up' }, 'args/direction'],
   ['chrome_network_capture', { action: 'start', needResponseBody: true }, 'args/needResponseBody'],
   ['chrome_cdp_command', { method: 'Runtime.evaluate', sessionId: 7 }, 'args/sessionId'],
   [
@@ -220,13 +239,13 @@ describe('direct browser capability contracts', () => {
     };
     for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
     expect(counts).toEqual({
-      type: 516,
-      properties: 56,
-      required: 52,
-      additionalProperties: 56,
-      description: 425,
-      enum: 45,
-      oneOf: 2,
+      type: 559,
+      properties: 59,
+      required: 54,
+      additionalProperties: 59,
+      description: 461,
+      enum: 49,
+      oneOf: 5,
       items: 10,
     });
   });
@@ -252,9 +271,9 @@ describe('direct browser capability contracts', () => {
     }
   });
 
-  test('keeps all 44 browser capabilities unique and discoverable', () => {
+  test('keeps all 45 browser capabilities unique and discoverable', () => {
     expect(TOOL_SCHEMAS.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
-    expect(new Set(EXPECTED_TOOLS).size).toBe(44);
+    expect(new Set(EXPECTED_TOOLS).size).toBe(45);
     for (const tool of TOOL_SCHEMAS) {
       expect(tool.inputSchema.type).toBe('object');
       expect(typeof tool.description).toBe('string');

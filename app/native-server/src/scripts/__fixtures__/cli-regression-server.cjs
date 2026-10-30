@@ -18,6 +18,9 @@ const framesWorker = fs.readFileSync(path.join(__dirname, 'cli-frames-worker.js'
 const injectTemplate = fs.readFileSync(path.join(__dirname, 'cli-inject.html'), 'utf8');
 const networkTemplate = fs.readFileSync(path.join(__dirname, 'cli-network.html'), 'utf8');
 const networkChild = fs.readFileSync(path.join(__dirname, 'cli-network-child.html'), 'utf8');
+const storageTemplate = fs.readFileSync(path.join(__dirname, 'cli-storage.html'), 'utf8');
+const storageChild = fs.readFileSync(path.join(__dirname, 'cli-storage-child.html'), 'utf8');
+const storageApp = fs.readFileSync(path.join(__dirname, 'cli-storage-app.js'), 'utf8');
 
 // One-line ~300 KB bundle with non-ASCII text, so source paging crosses byte and code-unit limits.
 function scriptsBundle() {
@@ -94,6 +97,28 @@ const server = http.createServer((request, response) => {
         .replaceAll('@@RUN_ID@@', runId)
         .replaceAll('@@CROSS_ORIGIN@@', 'http://localhost:' + server.address().port),
     );
+    return;
+  }
+  if (request.method === 'GET' && ['/storage', '/storage-child'].includes(url.pathname)) {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(
+      url.pathname === '/storage-child'
+        ? storageChild
+        : storageTemplate
+            .replaceAll('@@RUN_ID@@', runId)
+            .replaceAll('@@CROSS_ORIGIN@@', 'http://localhost:' + server.address().port),
+    );
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/storage-app.js') {
+    response.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(storageApp);
     return;
   }
   if (request.method === 'GET' && url.pathname === '/net-child') {

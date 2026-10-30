@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Storage fixture</title>
+  </head>
+  <body>
+    <p id="state">storage @@RUN_ID@@</p>
+    <iframe id="cross" src="@@CROSS_ORIGIN@@/storage-child"></iframe>
+    <script src="/storage-app.js"></script>
+    <script>
+      // The OOPIF posts here to run top-frame JavaScript, where a pending debugger pause hits;
+      // timers of a background tab are throttled too much to rely on.
+      window.addEventListener('message', (event) => {
+        if (event.data === 'tick') window.ticks = (window.ticks || 0) + 1;
+      });
+    </script>
+  </body>
+</html>
