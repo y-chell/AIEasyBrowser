@@ -1,0 +1,3 @@
+# Bundler output used as analysis test input; formatting breaks its sourcemap.
+src/analysis/__fixtures__/*.js
+src/analysis/__fixtures__/*.map
