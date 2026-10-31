@@ -1,1 +1,4 @@
 *.onnx filter=lfs diff=lfs merge=lfs -text
+# Bundler output used as analysis test input; keep bytes exact.
+app/native-server/src/analysis/__fixtures__/*.js -text
+app/native-server/src/analysis/__fixtures__/*.map -text

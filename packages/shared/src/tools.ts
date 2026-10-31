@@ -54,6 +54,12 @@ export const TOOL_NAMES = {
     PERFORMANCE_STOP_TRACE: 'performance_stop_trace',
     PERFORMANCE_ANALYZE_INSIGHT: 'performance_analyze_insight',
   },
+  // Run in the Native bridge itself, never forwarded to the extension.
+  ANALYSIS: {
+    CODE: 'analysis_code',
+    SOURCEMAP: 'analysis_sourcemap',
+    DECODE: 'analysis_decode',
+  },
 };
 
 const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
@@ -2767,6 +2773,187 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         },
       },
       required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.ANALYSIS.CODE,
+    description:
+      'Offline JavaScript analysis in the local bridge (no page access, nothing runs in the browser). Input is exactly one of file (absolute path, UTF-8, max 50 MB), text, or scriptId (+ sessionId/tabId) of a script held by chrome_cdp_scripts, which is read in full raw. beautify formats js, css or html (language from the file extension, else js); with outFile it writes the result (OUTPUT_EXISTS unless overwrite), otherwise it returns one slice: continue with offset=endOffset while hasMore (each page formats again, so prefer outFile for large input). unpack finds webpack module tables (runtime require + modules), webpack chunk pushes (self.webpackChunk*.push) and browserify bundles, and lists module id, format, chunkIds, offset/length, line/column and literal require deps; with outDir it writes one raw module file per id plus manifest.json (BUNDLE_FORMAT_UNKNOWN when none is found). search parses the code (PARSE_FAILED with location on syntax errors) and finds functions by name, calls by callee path (a.b.c), string literals by value, or any esquery selector; query is a substring (or regex with isRegex) and may be omitted to list all. Lines/columns are 0-based; for scriptId they are resource-relative like chrome_cdp_scripts, so hits work as breakpoint locations. Snippets and beautified text redact embedded tokens unless sanitizeOutput is false; written files keep the original text.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['beautify', 'unpack', 'search'],
+          description: 'beautify | unpack | search.',
+        },
+        file: { type: 'string', description: 'Absolute path of a local file to analyse.' },
+        text: { type: 'string', description: 'Code to analyse, passed inline.' },
+        scriptId: {
+          type: 'string',
+          description: 'Script from chrome_cdp_scripts list/search; needs a held CDP session.',
+        },
+        sessionId: {
+          type: 'string',
+          description: 'Child session owning scriptId (OOPIF or worker). Only with scriptId.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Tab of scriptId. If omitted, uses the current tab. Only with scriptId.',
+        },
+        language: {
+          type: 'string',
+          enum: ['js', 'css', 'html'],
+          description: 'beautify: input language (default from the file extension, else js).',
+        },
+        outFile: {
+          type: 'string',
+          description: 'beautify: absolute path to write the formatted result to.',
+        },
+        outDir: {
+          type: 'string',
+          description: 'unpack: absolute directory for module files and manifest.json.',
+        },
+        overwrite: {
+          type: 'boolean',
+          description: 'Replace existing output files (default false: OUTPUT_EXISTS).',
+        },
+        offset: {
+          type: 'number',
+          description: 'beautify without outFile: start offset in the formatted text (default 0).',
+        },
+        length: {
+          type: 'number',
+          description: 'beautify without outFile: UTF-16 code units to return (default 20000).',
+        },
+        kind: {
+          type: 'string',
+          enum: ['function', 'call', 'string', 'selector'],
+          description: 'search: what to find.',
+        },
+        query: {
+          type: 'string',
+          description:
+            'search: substring of the function name, callee path or string value (omit to list all).',
+        },
+        selector: {
+          type: 'string',
+          description: 'search kind selector: esquery selector over the ESTree AST.',
+        },
+        isRegex: {
+          type: 'boolean',
+          description: 'search: treat query as a JavaScript regular expression (default false).',
+        },
+        caseSensitive: {
+          type: 'boolean',
+          description: 'search: case-sensitive matching (default false).',
+        },
+        contextChars: {
+          type: 'number',
+          description:
+            'search: snippet characters before and from each match (default 80, max 500).',
+        },
+        cursor: {
+          type: 'string',
+          description: 'unpack/search: resume with the nextCursor of the previous page.',
+        },
+        limit: {
+          type: 'number',
+          description: 'unpack/search: maximum entries per page (default 50, max 500).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'Maximum UTF-8 bytes of text or entries per call (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description:
+            'Redact embedded tokens, JWTs, and long base64/hex strings in returned text (default true).',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.ANALYSIS.SOURCEMAP,
+    description:
+      'Source map analysis in the local bridge. The map is exactly one of file (absolute path), url (http, https or data; fetched by the bridge with HTTP(S)_PROXY/NO_PROXY honoured, 50 MB and 30 s limits), text, or scriptId (+ sessionId/tabId) of a script held by chrome_cdp_scripts whose sourceMappingURL is resolved against the script url and fetched (SOURCEMAP_NOT_FOUND when the script has none). Maps must be version 3; indexed maps with sections are flattened (SOURCEMAP_INVALID otherwise). load lists sources with whether sourcesContent is present, paged with cursor. lookup maps a 0-based generated line/column to the original source, line, column and name; with scriptId the position is resource-relative like chrome_cdp_scripts and the script start is subtracted. restore writes every source with sourcesContent under outDir: URL schemes such as webpack:// are dropped, .. never leaves outDir, names unsafe on Windows are replaced, and case-insensitive duplicates get a ~N suffix; sources without content are reported as skipped. Fetch errors show URLs without query strings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['load', 'lookup', 'restore'],
+          description: 'load | lookup | restore.',
+        },
+        file: { type: 'string', description: 'Absolute path of a local .map file.' },
+        url: { type: 'string', description: 'http, https or data URL of the source map.' },
+        text: { type: 'string', description: 'Source map JSON passed inline.' },
+        scriptId: {
+          type: 'string',
+          description: 'Script from chrome_cdp_scripts whose sourceMappingURL is used.',
+        },
+        sessionId: {
+          type: 'string',
+          description: 'Child session owning scriptId (OOPIF or worker). Only with scriptId.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Tab of scriptId. If omitted, uses the current tab. Only with scriptId.',
+        },
+        line: { type: 'number', description: 'lookup: 0-based generated line (required).' },
+        column: { type: 'number', description: 'lookup: 0-based generated column (default 0).' },
+        outDir: {
+          type: 'string',
+          description: 'restore: absolute directory to write the original sources into (required).',
+        },
+        overwrite: {
+          type: 'boolean',
+          description: 'restore: replace existing files (default false: OUTPUT_EXISTS).',
+        },
+        cursor: {
+          type: 'string',
+          description: 'load: resume with the nextCursor of the previous page.',
+        },
+        limit: {
+          type: 'number',
+          description: 'load: maximum sources per page (default 50, max 500).',
+        },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'load: maximum UTF-8 bytes of entries per call (default 51200).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description: 'load/lookup: redact embedded tokens in source names (default true).',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: TOOL_NAMES.ANALYSIS.DECODE,
+    description:
+      'Decode a string in the local bridge: base64 and base64url (strict alphabet, whitespace ignored), hex (optional 0x), url (percent-decoding), or jwt (header and payload JSON, iat/nbf/exp as ISO times; the signature is never verified and JWE is not supported). Byte results are returned as UTF-8 text when valid, otherwise as hex with encoding binary. Invalid input fails with DECODE_FAILED. Decoded strings redact embedded tokens unless sanitizeOutput is false.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['base64', 'base64url', 'hex', 'url', 'jwt'],
+          description: 'base64 | base64url | hex | url | jwt.',
+        },
+        text: { type: 'string', description: 'Encoded input.' },
+        maxOutputBytes: {
+          type: 'number',
+          description: 'Maximum UTF-8 bytes of the result (default 51200; OUTPUT_TOO_LARGE above).',
+        },
+        sanitizeOutput: {
+          type: 'boolean',
+          description: 'Redact embedded tokens, JWTs, and long base64/hex strings (default true).',
+        },
+      },
+      required: ['action', 'text'],
     },
   },
 ];

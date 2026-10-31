@@ -55,6 +55,9 @@ const EXPECTED_TOOLS = [
   'chrome_get_upload_status',
   'chrome_handle_dialog',
 ];
+// Run in the Native bridge, never dispatched to the extension.
+const ANALYSIS_TOOLS = ['analysis_code', 'analysis_sourcemap', 'analysis_decode'];
+const ALL_TOOLS = [...EXPECTED_TOOLS, ...ANALYSIS_TOOLS];
 
 const VALID_REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
   chrome_query_elements: { selector: '#fixture' },
@@ -217,6 +220,15 @@ const INVALID_ARGS: Array<[string, Record<string, unknown>, string]> = [
     { commands: [{ method: 'Runtime.enable' }], sessionId: null },
     'args/sessionId',
   ],
+  ['analysis_code', {}, 'args/action'],
+  ['analysis_code', { action: 'deobfuscate' }, 'args/action'],
+  ['analysis_code', { action: 'search', kind: 'regex' }, 'args/kind'],
+  ['analysis_code', { action: 'beautify', language: 'ts' }, 'args/language'],
+  ['analysis_code', { action: 'unpack', outDir: 1 }, 'args/outDir'],
+  ['analysis_sourcemap', { action: 'lookup', line: '1' }, 'args/line'],
+  ['analysis_sourcemap', { action: 'fetch' }, 'args/action'],
+  ['analysis_decode', { action: 'jwt' }, 'args/text'],
+  ['analysis_decode', { action: 'rot13', text: 'x' }, 'args/action'],
   ['chrome_health', { 'a/b~c': true }, 'args/a~1b~0c'],
   ['chrome_scan_compact', { maxElements: NaN }, 'args/maxElements'],
   ['chrome_scan_compact', { maxElements: Infinity }, 'args/maxElements'],
@@ -248,12 +260,12 @@ describe('direct browser capability contracts', () => {
     };
     for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
     expect(counts).toEqual({
-      type: 574,
-      properties: 60,
-      required: 55,
-      additionalProperties: 60,
-      description: 474,
-      enum: 50,
+      type: 618,
+      properties: 63,
+      required: 58,
+      additionalProperties: 63,
+      description: 515,
+      enum: 55,
       oneOf: 5,
       items: 11,
     });
@@ -280,9 +292,9 @@ describe('direct browser capability contracts', () => {
     }
   });
 
-  test('keeps all 46 browser capabilities unique and discoverable', () => {
-    expect(TOOL_SCHEMAS.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
-    expect(new Set(EXPECTED_TOOLS).size).toBe(46);
+  test('keeps all 49 capabilities unique and discoverable', () => {
+    expect(TOOL_SCHEMAS.map((tool) => tool.name)).toEqual(ALL_TOOLS);
+    expect(new Set(ALL_TOOLS).size).toBe(49);
     for (const tool of TOOL_SCHEMAS) {
       expect(tool.inputSchema.type).toBe('object');
       expect(typeof tool.description).toBe('string');
@@ -339,7 +351,15 @@ describe('direct browser capability contracts', () => {
     );
   });
 
-  test.each(EXPECTED_TOOLS)('describes %s without requiring call arguments', (name) => {
+  test.each([
+    ['analysis_code', { action: 'search', scriptId: '7', sessionId: 'S', tabId: 1, kind: 'call' }],
+    ['analysis_sourcemap', { action: 'lookup', url: 'https://a.test/x.map', line: 0, column: 3 }],
+    ['analysis_decode', { action: 'jwt', text: 'a.b.c', sanitizeOutput: false }],
+  ])('accepts declared %s arguments', (name, args) => {
+    expect(() => validateBrowserToolArguments(name, args)).not.toThrow();
+  });
+
+  test.each(ALL_TOOLS)('describes %s without requiring call arguments', (name) => {
     expect(getBrowserToolDefinition(name)).toBe(TOOL_SCHEMAS.find((tool) => tool.name === name));
   });
 

@@ -42,6 +42,26 @@ function scriptsBundle() {
   parts.push('window.bundleMarker="bundle-' + runId + '"');
   return parts.join(';') + '\n//# sourceMappingURL=scripts-bundle.js.map\n';
 }
+const analysisFixture = (name) =>
+  fs.readFileSync(path.join(__dirname, '..', '..', 'analysis', '__fixtures__', name), 'utf8');
+// The webpack bundle and its map come from the analysis unit fixtures; nomap.js carries a JWT for
+// the redaction check; badmap.js points at a map that is not served.
+const ANALYSIS_FILES = {
+  '/analysis': ['text/html', fixture('cli-analysis.html')],
+  '/analysis/webpack-prod.js': ['text/javascript', analysisFixture('webpack-prod.js')],
+  '/analysis/webpack-prod.js.map': ['application/json', analysisFixture('webpack-prod.js.map')],
+  '/analysis/nomap.js': [
+    'text/javascript',
+    'window.analysisToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZWIiLCJleHAiOjQxMDI0NDQ4MDB9.c2lnbmF0dXJlLWJ5dGVz";\n' +
+      'window.analysisRun = "' +
+      runId +
+      '";\n',
+  ],
+  '/analysis/badmap.js': [
+    'text/javascript',
+    'window.analysisBad = 1;\n//# sourceMappingURL=missing.js.map\n',
+  ],
+};
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || '/', 'http://127.0.0.1');
   if (url.pathname === '/favicon.ico') {
@@ -130,6 +150,15 @@ const server = http.createServer((request, response) => {
       'Cache-Control': 'no-store',
     });
     response.end(storageApp);
+    return;
+  }
+  if (request.method === 'GET' && Object.hasOwn(ANALYSIS_FILES, url.pathname)) {
+    const [type, body] = ANALYSIS_FILES[url.pathname];
+    response.writeHead(200, {
+      'Content-Type': type + '; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(body);
     return;
   }
   const profileFile =

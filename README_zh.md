@@ -311,6 +311,19 @@ aieasybrowser --session re call chrome_cdp_profile '{"action":"heapDiff","from":
 
 Chrome 不向扩展开放 Profiler 和 HeapProfiler 域，所以没有 JS 覆盖率和 heap snapshot。`cssStart` 在标签和已附着的跨站 iframe 里跟踪 CSS 规则使用（worker 没有 CSS）；`cssReport` 合并到目前为止用到的规则，按未用量从多到少列出每个样式表的已用和未用字符数（UTF-16 字符，未用部分含空白和注释），可按 `url`、`sessionId` 过滤并分页；`cssStop` 结束跟踪并返回最终结果，之后 `cssReport` 仍可读。`cpuStart`/`cpuStop` 通过 Chrome tracing 采样，间隔约 0.5 ms，不能调整；整个浏览器同时只能有一个 trace，与 `performance_start_trace` 互斥，冲突时报 `TRACE_BUSY`。`cpuStop` 为每个有采样的线程（页面、跨站 iframe、dedicated worker）在下载目录写一个 `.cpuprofile`（DevTools 可直接打开），返回路径和按自身耗时排序的热点函数（函数名、url、0 基行列、scriptId）；scriptId 属于该 profile 的 `sessionId`，可直接交给 `chrome_cdp_scripts source`。`heapUsage` 给出页面和各子会话的 JS 堆大小；`heapSample` 按全局构造器路径数存活实例（按原型链，含子类），保留最近 20 个样本；`heapDiff` 对比同一会话的两个样本，给出各构造器的前后数量和差值以及堆大小变化，没有 self size。计数会先 GC 再遍历整个堆，页面每个构造器冻结约 0.5–1 秒，该会话被调试器暂停时报 `PROFILE_PAGE_PAUSED`。重复 `cssStart`/`cpuStart` 报 `CSS_COVERAGE_ACTIVE`/`CPU_PROFILE_ACTIVE`；会话 `stop` 结束跟踪并丢弃未停止的 CPU 采样。url 和函数名里的内嵌 token 默认脱敏（`.cpuprofile` 文件里也是）。
 
+`analysis_code`、`analysis_sourcemap`、`analysis_decode` 在本机桥接器里离线分析代码，不在页面里执行任何东西，也不需要扩展参与；只有输入为 `scriptId` 时才经 `chrome_cdp_scripts` 读取已持有会话里的脚本原文：
+
+```bash
+aieasybrowser --session re call analysis_code '{"action":"search","scriptId":"6","kind":"call","query":"btoa"}'
+aieasybrowser --session re call analysis_code '{"action":"unpack","scriptId":"6","outDir":"E:\\work\\modules"}'
+aieasybrowser --session re call analysis_code '{"action":"beautify","file":"E:\\work\\app.min.js","outFile":"E:\\work\\app.js"}'
+aieasybrowser --session re call analysis_sourcemap '{"action":"lookup","scriptId":"6","line":0,"column":120}'
+aieasybrowser --session re call analysis_sourcemap '{"action":"restore","scriptId":"6","outDir":"E:\\work\\src"}'
+aieasybrowser --session re call analysis_decode '{"action":"jwt","text":"eyJ..."}'
+```
+
+输入是 `file`（绝对路径、UTF-8、最大 50 MB）、`text`、`scriptId`（可带 `sessionId`/`tabId`，省略 `tabId` 时用任务当前标签）三选一，sourcemap 还可以给 `url`。`beautify` 格式化 js、css、html，带 `outFile` 时写文件（已存在报 `OUTPUT_EXISTS`，除非 `overwrite:true`），否则按 `offset`/`length` 分页返回，每页都会重新格式化，大文件用 `outFile`。`unpack` 识别 webpack 模块表、webpack chunk push 和 browserify，列出模块 id、偏移、行列和字面量依赖，带 `outDir` 时每个模块写一个原文文件加 `manifest.json`；识别不到报 `BUNDLE_FORMAT_UNKNOWN`。识别是启发式的，自定义打包器和改写过的运行时可能识别不到。`search` 按名字找函数、按调用路径（`a.b.c`）找调用、按值找字符串，或用 esquery 选择器；语法错误报 `PARSE_FAILED` 并带 0 基位置，嵌套极深的代码会因解析器栈深度报 `PARSE_FAILED`。行列都是 0 基；`scriptId` 输入的行列与 `chrome_cdp_scripts` 一样相对资源，可直接用作断点位置。`analysis_sourcemap` 只接受 v3 map（含 sections 的索引 map 会展开）：`load` 列出源文件和是否带 sourcesContent；`lookup` 把生成位置映射回原文件、行列和名字；`restore` 把带内容的源文件写到 `outDir`，去掉 `webpack://` 等协议，`..` 不会越出 `outDir`，Windows 不允许的名字被替换，大小写冲突加 `~N` 后缀，没有内容的源列为 skipped。`scriptId` 输入按脚本 url 解析 sourceMappingURL 并由桥接器下载（遵循 `HTTP(S)_PROXY`/`NO_PROXY`；设置了代理时需要 Node 22.21+ 或 24.5+，更低版本直接报错），脚本没有 map 报 `SOURCEMAP_NOT_FOUND`，下载失败报 `SOURCEMAP_FETCH_FAILED`。`analysis_decode` 解码 base64、base64url、hex、url 和 jwt；jwt 不校验签名，不支持 JWE。返回文本里的内嵌 token 默认脱敏，`sanitizeOutput:false` 给原值；写出的文件保留原文。
+
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：
@@ -410,6 +423,8 @@ JSON 保留每条命令的字节、耗时、失败阶段及每对比较。`agent
 `pnpm test:cli-cdp-storage` 要求已重载包含 `chrome_cdp_storage` 的扩展。临时网页（127.0.0.1）含一个跨站 iframe（localhost），两者各自建立 IndexedDB 库和 Cache Storage。测试写入的 cookie、key、库和 cache 都以本轮随机前缀命名，脚本只读写和删除这些数据；127.0.0.1 和 localhost 的 cookie 不按端口隔离，断言只看本轮名字，不看完整列表。脚本验证：未 start 时被拒；`origins` 给出顶层和跨站 iframe（含子会话和分区 storage key）；httpOnly cookie 页面看不到但能列出，跨站 iframe 的分区 cookie 与页面自己写的分区 cookie 带 `partitionKey` 列出；cookie 值默认脱敏；SameSite=None 缺 Secure、domain 不覆盖主机、url 不在标签内、过去的过期时间被拒；不带 `partitionKey` 删分区 cookie 报 `COOKIE_NOT_FOUND`，带上后删除并从页面消失。local/sessionStorage 按 origin 分开写入并被页面看到，敏感 key 和 JSON 里的敏感字段默认脱敏，超长值截断并给出原长度，分页、重复删除、标签外 origin、非 origin 字符串、多余参数和未知 action 被拒，`clearItems` 只清一个区。IndexedDB 列出库结构和条数，按主键分页、区间加倒序、按索引读取，二进制和 Date 按类型返回，敏感字段默认脱敏；不存在的库、仓库、索引和非法区间被拒，读不存在的库不会建库。Cache Storage 列出条目、按路径过滤、读取 JSON（内嵌 token 脱敏）和二进制响应，跨站 iframe 的 cache 在其子会话读取；不存在的 cache 和条目被拒。顶层被调试器暂停时存储、IndexedDB、Cache Storage 调用报 `STORAGE_PAGE_PAUSED`，cookie 和跨站 iframe 照常可读。其他任务访问被拒。结束删除本轮 cookie、库、cache 和 key 并核对为空，关闭标签、忘记任务并退出临时服务。
 
 `pnpm test:cli-cdp-profile` 要求已重载包含 `chrome_cdp_profile` 的扩展。临时网页（127.0.0.1）含跨站 iframe（localhost）和 dedicated worker，只对本轮打开的标签采集。脚本验证：未 start 时被拒；`profile.css` 的总长、已用和未用字符数与样式表文本逐字一致，页面新加一个元素后下一次报告合并了新用到的规则，跨站 iframe 的内联样式表在其子会话列出；页面、跨站 iframe、worker 各自跑一段忙循环后，每个线程一个 `.cpuprofile`，热点函数、0 基行号和 scriptId 与 `chrome_cdp_scripts` 在同一会话里列出的一致，url 里的 token 在输出和文件里都已脱敏；两次堆样本之间新建 1000 个实例，`heapDiff` 给出 +1000，未变的构造器为 0；不存在的构造器、跨会话对比、未知样本、未知会话被拒；顶层暂停时 `heapSample` 报 `PROFILE_PAGE_PAUSED`，CSS、tracing 和 worker 照常；重复 start 和其他任务被拒；会话 `stop` 结束 trace 和 CSS 跟踪并释放浏览器 trace 锁。结束删除本轮 `.cpuprofile` 文件、关闭标签、忘记任务并退出临时服务。
+
+`pnpm test:cli-analysis` 要求已重载包含 `analysis_*` 的扩展（工具表与 Native 一致）。脚本先在没有标签时验证 jwt 解码、非法 hex（`DECODE_FAILED`）、非 bundle 文本（`BUNDLE_FORMAT_UNKNOWN`）和语法错误（`PARSE_FAILED`）；再在临时网页加载一个 webpack 5 生产包（带相对 sourceMappingURL）、一个无 map 脚本和一个 map 返回 404 的脚本，持有会话后按 scriptId 验证：map 的源列表与服务端文件一致；`btoa` 调用的 `search` 位置与在 bundle 文本里算出的一致，`lookup` 把同一位置映射到 `util.mjs` 第 1 行；`unpack` 找到模块 28 并写出模块文件和 manifest；`restore` 写出的文件与 sourcesContent 逐字相同；`unpack`、`restore` 第二次写入同一目录报 `OUTPUT_EXISTS`，`overwrite:true` 后成功；`beautify` 写出的文件与返回长度一致；无 map、404 map、未知 scriptId 分别报 `SOURCEMAP_NOT_FOUND`、`SOURCEMAP_FETCH_FAILED`、`SCRIPT_NOT_FOUND`；字符串搜索默认脱敏 JWT，`sanitizeOutput:false` 给原值。结束删除临时输出目录、停止会话、关闭标签、忘记任务并退出临时服务。
 
 ## 许可证
 

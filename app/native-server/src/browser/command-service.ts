@@ -19,6 +19,7 @@ import {
   validateBrowserToolArguments,
 } from './tool-dispatch';
 import { logger, startTimer } from '../util/diag-log';
+import { AnalysisError, isAnalysisTool, runAnalysisTool } from '../analysis';
 
 interface ElementTarget {
   ref: string;
@@ -655,6 +656,26 @@ export class BrowserCommandService {
       case 'call': {
         const tool = getBrowserToolDefinition(command.tool);
         const args = { ...command.args };
+        if (isAnalysisTool(command.tool)) {
+          // Analysis runs in this process; only scriptId input touches the browser.
+          if (
+            args.scriptId !== undefined &&
+            args.tabId === undefined &&
+            session.tabId !== undefined
+          )
+            args.tabId = session.tabId;
+          validateBrowserToolArguments(command.tool, args);
+          try {
+            return await runAnalysisTool(command.tool, args, {
+              invoke: (name, toolArgs) => this.invoke(session, name, toolArgs, signal),
+              signal,
+            });
+          } catch (error) {
+            if (error instanceof AnalysisError)
+              throw new BrowserCommandError(error.code, error.message);
+            throw error;
+          }
+        }
         if (
           'tabId' in (tool.inputSchema.properties || {}) &&
           args.tabId === undefined &&

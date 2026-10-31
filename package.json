@@ -43,6 +43,7 @@
     "test:cli-cdp-network": "pnpm --filter aieasybrowser-bridge run test:cli-cdp-network",
     "test:cli-cdp-storage": "pnpm --filter aieasybrowser-bridge run test:cli-cdp-storage",
     "test:cli-cdp-profile": "pnpm --filter aieasybrowser-bridge run test:cli-cdp-profile",
+    "test:cli-analysis": "pnpm --filter aieasybrowser-bridge run test:cli-analysis",
     "prepare": "husky"
   },
   "devDependencies": {

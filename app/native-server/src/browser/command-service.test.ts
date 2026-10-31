@@ -8,6 +8,11 @@ import { BrowserCommandError } from './protocol';
 import { TOOL_SCHEMAS } from 'aieasybrowser-shared';
 import { setLogDirForTests } from '../util/diag-log';
 
+// ts-jest has no compiled worker.js; run analysis jobs in the test thread.
+jest.mock('../analysis/runner', () => ({
+  runInWorker: async (job: any) => jest.requireActual<any>('../analysis/compute').computeJob(job),
+}));
+
 let logDir: string;
 
 beforeEach(() => {
@@ -588,6 +593,79 @@ describe('named CLI browser workflows', () => {
       actionStatus: 'not_started',
     });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  test('runs analysis tools in Native without the extension or a bridge', async () => {
+    service = new BrowserCommandService(() => null);
+    expect(
+      await run({
+        command: 'call',
+        tool: 'analysis_decode',
+        args: { action: 'hex', text: '6869' },
+      }),
+    ).toEqual({
+      ok: true,
+      session: 'task',
+      result: { action: 'hex', encoding: 'utf8', byteLength: 2, text: 'hi' },
+    });
+    expect(
+      await run({
+        command: 'call',
+        tool: 'analysis_code',
+        args: { action: 'search', kind: 'call', text: 'a(' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'PARSE_FAILED', message: expect.stringMatching(/^PARSE_FAILED: /) },
+      actionStatus: 'not_started',
+    });
+    expect(
+      await run({ command: 'call', tool: 'analysis_decode', args: { action: 'hex', text: 1 } }),
+    ).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test('reads analysis scripts from the session tab and keeps element refs', async () => {
+    const ref = await selectedScan();
+    send.mockImplementation(async (payload: any) =>
+      payload.name === 'chrome_cdp_scripts'
+        ? success({
+            script: {
+              scriptId: '9',
+              url: 'https://fixture.test/a.js',
+              startLine: 0,
+              startColumn: 0,
+            },
+            totalLength: 8,
+            offset: 0,
+            endOffset: 8,
+            text: 'go(1);go',
+            hasMore: false,
+          })
+        : defaultReply(payload),
+    );
+    const searched = await run({
+      command: 'call',
+      tool: 'analysis_code',
+      args: { action: 'search', scriptId: '9', kind: 'call', query: 'go' },
+    });
+    expect(searched).toMatchObject({
+      ok: true,
+      result: { source: { type: 'script', scriptId: '9' }, matches: [{ line: 0, column: 0 }] },
+    });
+    const scriptCall = send.mock.calls.find(
+      ([payload]: any) => payload.name === 'chrome_cdp_scripts',
+    );
+    expect((scriptCall![0] as any).args).toMatchObject({
+      scriptId: '9',
+      tabId: 7,
+      sanitizeOutput: false,
+    });
+    // Analysis does not touch the page, so refs from the last scan stay valid.
+    send.mockImplementation(defaultReply);
+    expect(
+      await run({ command: 'act', actions: [{ op: 'click', ref }], scan: false }),
+    ).toMatchObject({ ok: true });
   });
 
   test('reports bridge unavailability and already-cancelled commands before dispatch', async () => {

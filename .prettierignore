@@ -33,3 +33,7 @@ stats-*.json
 
 # 锁文件
 pnpm-lock.yaml
+
+# 分析测试输入：打包器原样输出，格式化会破坏与 sourcemap 的对应
+app/native-server/src/analysis/__fixtures__/*.js
+app/native-server/src/analysis/__fixtures__/*.map

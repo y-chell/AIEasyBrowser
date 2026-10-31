@@ -27,6 +27,8 @@ export default tseslint.config(
       'app/**/workers/**',
       'packages/**/workers/**',
       'test-inject-script.js',
+      // Bundler output kept verbatim as analysis test input.
+      'app/native-server/src/analysis/__fixtures__/*.js',
     ],
   },
 

@@ -319,6 +319,23 @@ aieasybrowser --session re call chrome_cdp_profile '{"action":"heapDiff","from":
 - Heap: `heapUsage` lists heap sizes of the page and every child session. `heapSample` counts live instances of global constructor paths (prototype chain, subclasses included) in the page or one `sessionId`; `heapDiff` compares two samples of the same session (count before, after, delta; no self size). Counting collects garbage and walks the whole heap: the page freezes about 0.5-1 s per constructor, so sample only what you need. `heapSample` fails with `PROFILE_PAGE_PAUSED` while that session is paused.
 - A second `cssStart`/`cpuStart` fails with `CSS_COVERAGE_ACTIVE`/`CPU_PROFILE_ACTIVE`. Session `stop` ends tracking and discards an unfinished CPU trace. Delete `.cpuprofile` files you no longer need; they may contain page URLs and function names.
 
+`analysis_code`, `analysis_sourcemap`, and `analysis_decode` analyze code offline in the bridge; nothing runs in the page. Input is exactly one of `file` (absolute path), `text`, or `scriptId` (+ `sessionId`/`tabId`) of a script listed by `chrome_cdp_scripts` in this task's held session; sourcemap also takes `url`.
+
+```bash
+aieasybrowser --session re call analysis_code '{"action":"search","scriptId":"6","kind":"call","query":"btoa"}'
+aieasybrowser --session re call analysis_code '{"action":"unpack","scriptId":"6","outDir":"E:\\work\\modules"}'
+aieasybrowser --session re call analysis_sourcemap '{"action":"lookup","scriptId":"6","line":0,"column":120}'
+aieasybrowser --session re call analysis_sourcemap '{"action":"restore","scriptId":"6","outDir":"E:\\work\\src"}'
+aieasybrowser --session re call analysis_decode '{"action":"jwt","text":"eyJ..."}'
+```
+
+- Lines and columns are 0-based; with `scriptId` they are resource-relative like `chrome_cdp_scripts`, so `search` hits and `lookup` positions work as breakpoint locations.
+- `search` kinds: `function` (by name), `call` (callee path `a.b.c`), `string` (by value), `selector` (esquery). `query` is a substring, or a regex with `isRegex`. Syntax errors and very deep nesting fail with `PARSE_FAILED`.
+- `unpack` recognizes webpack module tables, webpack chunk pushes, and browserify; anything else fails with `BUNDLE_FORMAT_UNKNOWN`. Detection is heuristic. `outDir` writes raw module files plus `manifest.json`.
+- `beautify` pages with `offset`/`length` and reformats on every page; use `outFile` for large input. Writes fail with `OUTPUT_EXISTS` unless `overwrite:true`.
+- `scriptId` maps come from the script's sourceMappingURL, fetched by the bridge: `SOURCEMAP_NOT_FOUND` when there is none, `SOURCEMAP_FETCH_FAILED` when it cannot be downloaded. `restore` writes sources with content under `outDir` and lists the rest as skipped.
+- `analysis_decode` never verifies JWT signatures. Returned text redacts embedded tokens unless `sanitizeOutput:false`; written files keep the original text.
+
 `session --list` inspects tasks. `--session <task> session --forget` discards its state without closing the browser tab. At most 64 sessions are retained, until forgotten or the bridge restarts.
 
 If `aieasybrowser` is absent from PATH, use the built entrypoint `node <repository>/app/native-server/dist/cli.js`; locate it from this skill's repository, not by guessing another installation. Installation and bridge diagnostics live in the repository's `README_zh.md`.
