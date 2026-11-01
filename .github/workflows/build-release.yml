@@ -1,0 +1,78 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        run: npm install --global pnpm@8.15.9
+
+      - name: Resolve release meta
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="$(node -p "require('./app/native-server/package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "Tag $TAG does not match app/native-server version v$VERSION" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Package release assets
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p release
+          (cd app/chrome-extension/.output/chrome-mv3 && zip -qr "$GITHUB_WORKSPACE/release/aieasybrowser-extension-$TAG.zip" .)
+          node scripts/stage-bridge.mjs "$RUNNER_TEMP/aieasybrowser-bridge"
+          (cd "$RUNNER_TEMP/aieasybrowser-bridge" && node dist/cli.js --version)
+          (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/release/aieasybrowser-bridge-$TAG.zip" aieasybrowser-bridge)
+          (cd release && sha256sum *.zip > sha256sums.txt)
+          ls -l release
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: aieasybrowser-${{ steps.meta.outputs.tag }}
+          path: release/*
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "$TAG" --generate-notes --verify-tag
+          fi
