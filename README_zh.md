@@ -70,41 +70,45 @@ CLI -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser �
 
 ## 安装
 
-环境要求：Node.js 20+、Chrome 或 Chromium、pnpm 8+（源码构建）。Windows 下的命令使用 PowerShell 7。
+环境要求：Node.js 20+、Chrome 或 Chromium；源码构建另需 pnpm 8+。Windows 下的命令使用 PowerShell 7。
 
-### 1. 从源码构建
+### 1. 获取构建产物
 
-进入 AIEasyBrowser 源码根目录后执行：
+从 [Releases](https://github.com/y-chell/AIEasyBrowser/releases) 下载同一版本的两个 zip，解压到固定目录：
+
+- `aieasybrowser-extension-<版本>.zip`：Chrome 扩展。
+- `aieasybrowser-bridge-<版本>.zip`：Native Server，已包含运行依赖，解压后得到 `aieasybrowser-bridge` 目录。
+
+也可以从源码构建，在源码根目录执行：
 
 ```powershell
 pnpm install --ignore-scripts
 pnpm run build
 ```
 
-构建产物：
-
-- Chrome 扩展：`app/chrome-extension/.output/chrome-mv3`
-- Native Server：`app/native-server/dist`
+源码构建的扩展在 `app/chrome-extension/.output/chrome-mv3`，Native Server 在 `app/native-server/dist`。
 
 ### 2. 加载 Chrome 扩展
 
-打开 `chrome://extensions/`，开启开发者模式，选择“加载已解压的扩展程序”，加载 `app/chrome-extension/.output/chrome-mv3`。
+打开 `chrome://extensions/`，开启开发者模式，选择“加载已解压的扩展程序”，加载解压后的扩展目录；源码构建时加载 `app/chrome-extension/.output/chrome-mv3`。
 
 项目使用固定公钥，扩展 ID 为 `coleelkpegcobndoloaofalgnkhiamll`。移动源码目录不会改变扩展 ID，不需要生成密钥或手工填写 ID。
 
 ### 3. 注册 Native Host
 
-在源码根目录执行：
+使用 Release 包时，在 `aieasybrowser-bridge` 目录执行：
+
+```powershell
+node dist/cli.js register
+```
+
+源码构建时，在源码根目录执行：
 
 ```powershell
 pnpm --filter aieasybrowser-bridge exec node dist/cli.js register
 ```
 
-注册默认针对当前用户的 Chrome。使用 Chromium 时，将注册命令改为：
-
-```powershell
-pnpm --filter aieasybrowser-bridge exec node dist/cli.js register --browser chromium
-```
+注册默认针对当前用户的 Chrome。使用 Chromium 时，在命令末尾加 `--browser chromium`。
 
 Native Messaging host 名称为 `com.aieasybrowser.nativehost`。注册不会自动提权，不进行系统级安装；包安装阶段也不会自动修改浏览器注册表。
 
@@ -125,7 +129,7 @@ Pop-Location
 aieasybrowser health
 ```
 
-这会把本地源码包的 CLI 链接到当前 Node.js 的全局命令目录，不下载另一个浏览器工具。更换 Node.js 版本后需重新链接。也可以不注册全局命令，直接执行 `node app/native-server/dist/cli.js health`。
+这会把本地源码包的 CLI 链接到当前 Node.js 的全局命令目录，不下载另一个浏览器工具。使用 Release 包时，在 `aieasybrowser-bridge` 目录执行同样的 `npm link --ignore-scripts --offline`。更换 Node.js 版本后需重新链接。也可以不注册全局命令，在 Native Server 目录直接执行 `node dist/cli.js health`。
 
 CLI 默认连接 `http://127.0.0.1:12307/browser`。显式指定地址时使用 `--url http://127.0.0.1:12307`，或设置下文的 `AIEASYBROWSER_*` 环境变量。该入口只接受回环来源，并校验 Host、Origin 和配置的 bearer token。
 

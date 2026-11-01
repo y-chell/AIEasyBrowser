@@ -70,39 +70,43 @@ The extension starts the local bridge through Native Messaging. The CLI sends JS
 
 Requirements: Node.js 20+, Chrome or Chromium, and pnpm 8+ for source builds. Windows commands below use PowerShell 7.
 
-### 1. Build from source
+### 1. Get the build
 
-From the repository root:
+Download both zips of the same version from [Releases](https://github.com/y-chell/AIEasyBrowser/releases) and extract them to a permanent location:
+
+- `aieasybrowser-extension-<version>.zip`: the Chrome extension.
+- `aieasybrowser-bridge-<version>.zip`: the Native Server with its runtime dependencies. It extracts to an `aieasybrowser-bridge` directory.
+
+Or build from source in the repository root:
 
 ```powershell
 pnpm install --ignore-scripts
 pnpm run build
 ```
 
-Build output:
-
-- Chrome extension: `app/chrome-extension/.output/chrome-mv3`
-- Native Server: `app/native-server/dist`
+A source build puts the extension in `app/chrome-extension/.output/chrome-mv3` and the Native Server in `app/native-server/dist`.
 
 ### 2. Load the Chrome extension
 
-Open `chrome://extensions/`, turn on Developer mode, choose "Load unpacked", and select `app/chrome-extension/.output/chrome-mv3`.
+Open `chrome://extensions/`, turn on Developer mode, choose "Load unpacked", and select the extracted extension directory, or `app/chrome-extension/.output/chrome-mv3` for a source build.
 
 The project ships a fixed public key, so the extension ID is always `coleelkpegcobndoloaofalgnkhiamll`. Moving the source directory does not change it, and there is no key to generate or ID to enter.
 
 ### 3. Register the Native Host
 
-From the repository root:
+With the Release package, run in the `aieasybrowser-bridge` directory:
+
+```powershell
+node dist/cli.js register
+```
+
+With a source build, run from the repository root:
 
 ```powershell
 pnpm --filter aieasybrowser-bridge exec node dist/cli.js register
 ```
 
-This registers for the current user's Chrome. For Chromium, use:
-
-```powershell
-pnpm --filter aieasybrowser-bridge exec node dist/cli.js register --browser chromium
-```
+This registers for the current user's Chrome. For Chromium, append `--browser chromium`.
 
 The Native Messaging host is `com.aieasybrowser.nativehost`. Registration never elevates privileges or installs system-wide, and package installation does not touch the browser registry.
 
@@ -123,7 +127,7 @@ Pop-Location
 aieasybrowser health
 ```
 
-This links the local CLI into the current Node.js global bin directory; nothing else is downloaded. Link again after switching Node.js versions. Without a global command, run `node app/native-server/dist/cli.js health` instead.
+This links the local CLI into the current Node.js global bin directory; nothing else is downloaded. With the Release package, run the same `npm link --ignore-scripts --offline` in the `aieasybrowser-bridge` directory. Link again after switching Node.js versions. Without a global command, run `node dist/cli.js health` from the Native Server directory instead.
 
 The CLI connects to `http://127.0.0.1:12307/browser` by default. Pass `--url http://127.0.0.1:12307` or set the `AIEASYBROWSER_*` variables below to change it. The endpoint accepts only loopback clients and checks Host, Origin, and the optional bearer token.
 
