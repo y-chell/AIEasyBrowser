@@ -22,9 +22,9 @@ aieasybrowser --session research press Enter --expect '{"kind":"url","value":"/r
 ```
 
 - Use the tab ID a command returned, not a remembered one or whichever tab is active. `use` does not steal focus; `use --focus` does. `open <url>` opens or reuses a URL, `open <url> --current` navigates the selected tab. Opening a URL does not mean the site is ready.
-- Scan output has bounded `elements`, `text`, frame IDs, errors, and truncation. Use the returned versioned `ref`. If a target is outside the budget, scan one frame (`scan --frame <id>`), raise the limit, or use a query tool.
+- Scan output has bounded `elements`, `text`, frame IDs, errors, and truncation. The default budget is 40 elements, 10 text blocks, 20 frame summaries, and 10 frame errors for the whole page, not per iframe; `truncated: true` or non-empty `errors` means you have not seen the full page. Use the returned versioned `ref`. If a target is outside the budget, scan one frame (`scan --frame <id>`), raise the limit, or use a query tool. Form values are not echoed; protected fields are marked `protected`.
 - `fill` treats its value as a string; for a checkbox use `fill <ref> false --json-value`. `press` targets the focused element of the scanned top frame (`--frame <id>` for an iframe) and takes no ref.
-- `act '[...]'` runs a short known sequence in order, checks `--expect`, and returns a fresh scan. Batch fields whose targets stay stable; stop and observe between steps that change the page.
+- `act '[...]'` runs up to 20 `click`/`fill`/`press` actions in order, checks `--expect`, and returns a fresh scan. Batch fields whose targets stay stable; stop and observe between steps that change the page.
 - Postconditions: `element`, `text`, `url`, `title` (with `value` and `match`: `contains`, `equals`, `regex`), synchronous `javascript` (MAIN world of the frame; return false for absent objects instead of dereferencing null), and `networkIdle`. Prefer a site-specific condition; a successful click does not prove its effect.
 - `wait '<condition-json>'` waits and rescans without acting. `--timeout <ms>` is the overall deadline (default 60000, max 120000). JSON arguments accept `@file` or `@-` for stdin, which avoids shell quoting.
 
@@ -98,7 +98,7 @@ aieasybrowser --session research call chrome_screenshot '{"savePng":true}'
 aieasybrowser --session research eval 'return document.title'
 ```
 
-- `call` fills `tabId` from the session's selected tab only when the schema accepts one and you omitted it; clipboard tools need no tab. Unknown top-level arguments are rejected. `chrome_close_tabs` without IDs or URL closes only the session's selected tab, never the user's active page.
+- `call` fills `tabId` from the session's selected tab only when the schema accepts one and you omitted it; clipboard tools need no tab. Arguments are checked against the `describe` schema before any browser IO: a bad one fails with `INVALID_ARGUMENT` (exit `2`) and a JSON Pointer path such as `args/commands/0/method`, and leaves existing refs valid. Unknown top-level arguments are rejected; open maps such as headers and CDP params accept any keys. The check does not coerce types (`"false"` stays a string) or fill defaults. `chrome_close_tabs` without IDs or URL closes only the session's selected tab, never the user's active page.
 - `chrome_javascript` (and `eval --frame <id>`) always runs over CDP and never in a context other than the one asked for. Pick at most one: `frameId` (from scan or `chrome_list_frames`, `world` `MAIN` by default or `ISOLATED` for AEB's own world; the CLI has no `--world`), `sessionId` (a held child: worker, service worker, OOPIF), or `workerTargetId` (a shared worker from `chrome_cdp_session workers`). A frame inside a cross-site iframe needs this task's held session. `FRAME_MAPPING_FAILED` covers an owner element inside a shadow root; `FRAME_TARGET_NOT_ATTACHED` a cross-site iframe nested in another (one level auto-attaches).
 - `chrome_network_capture` is webRequest only: no bodies, no WebSocket frames. Use `chrome_cdp_network` for those.
 
