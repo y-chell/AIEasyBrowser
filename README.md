@@ -164,8 +164,6 @@ In daily use the agent issues these commands following the rules in the Skill: h
 - `stop` of a debugging session held for a long time occasionally times out; cause not identified.
 - Chrome shows its debugging banner while debugging tools run.
 
-`docs/BROWSER-PLAN.md` records how each of these was checked.
-
 ## Local connection settings
 
 The defaults work as they are. To change them, set:

@@ -166,8 +166,6 @@ aieasybrowser --session demo click <ref> --expect '{"kind":"text","text":"Result
 - 调试会话长时间持有后，`stop` 偶尔超时，原因未定位。
 - 调试类工具运行期间，Chrome 顶部会显示调试提示条。
 
-各项的验证过程见 `docs/BROWSER-PLAN.md`。
-
 ## 本机连接配置
 
 默认配置即可使用。需要调整时，使用以下环境变量：

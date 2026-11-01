@@ -50,4 +50,5 @@ CLAUDE.md
 **/*/coverage/*
 
 .docs/
+docs/
 .claude/
