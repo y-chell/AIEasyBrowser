@@ -4,44 +4,59 @@
 
 **Let agents use the Chrome you already use.**
 
-[中文介绍与使用指南](README_zh.md)
+[中文](README_zh.md)
 
-AIEasyBrowser is an agent-native browser control layer with a CLI + Skill entrypoint. It connects AI agents to your everyday Chrome profile, with its open tabs, existing login sessions, and installed extensions.
+AIEasyBrowser is a browser control tool for AI agents, driven through a CLI and a Skill. It turns your everyday Chrome into a browser that an agent can read, operate, and verify. Your open tabs, logged-in sessions, and extensions stay in the profile you already use; there is no separate automation browser to set up.
 
-The goal is straightforward: less setup and human interruption, less guesswork when targeting elements, and observable results after each action. Planning and decision-making belong to the agent; AIEasyBrowser provides the browser access, execution, and feedback.
+The goal is to make browser control easier, faster, and more accurate for agents: fewer human interruptions when connecting, page elements the agent can target directly, and an observable, checkable result after every action.
 
 ## Why AIEasyBrowser
 
-Browser control should not require a person to approve every reconnection, or a fresh automation profile just to work on a site that is already logged in.
+Early browser tools were built for human-AI collaboration: a person approved the connection, picked elements, and drove the interface while the AI helped with some steps. Agents can now plan and execute on their own, so a browser tool should offer a clear execution interface instead of handing the task back to a person.
+
+AIEasyBrowser leaves understanding, planning, and judgement to the agent, and keeps the browser connection, page reading, action execution, and feedback in the tool layer.
 
 ### Connect once, keep working
 
-Some debugging-based tools require a new human approval when reconnecting after a session ends. AIEasyBrowser uses a Chrome extension and a registered Native Messaging host instead. After installation and registration, the extension connects automatically and attempts to reconnect if the bridge disconnects. An agent does not need someone to open an extension panel or approve each bridge connection.
+Some debugging-based tools ask a person to approve again every time they reconnect after a session ends. If nobody is at the computer, the agent waits.
+
+AIEasyBrowser connects through a Chrome extension and Native Messaging. After the extension is installed and the Native Host is registered, the extension connects on its own and tries to reconnect if the link drops. The agent never waits for someone to open an extension panel or approve a connection.
 
 ### Keep your existing browser context
 
-Actions run in the profile where the extension is installed, rather than in a separately launched Playwright browser. There is no need to copy cookies or set up another profile just for automation. This avoids the extra login setup that can encounter Cloudflare challenges or site restrictions in a fresh browser environment.
+A separately launched automation browser usually runs another profile, so it cannot pick up the logins of your everyday browser, and logging in again may hit Cloudflare checks or site restrictions on automated environments.
 
-### Give agents actionable page information
+AIEasyBrowser acts inside the Chrome profile where the extension is installed, with its existing sessions, cookies, and environment. Nothing is copied and no extra profile is created. Dashboards and web apps you are already logged into become the agent's workspace.
 
-CLI `scan` provides a globally bounded overview of important text and controls. Its handles bind the named task session, scan revision, frame, and Chrome document ID, so even a refresh to the same URL rejects old handles. `chrome_read_page` and `chrome_query_elements` provide additional accessibility and DOM information.
+### Targets, not just screenshots
 
-`chrome_wait_for` and `chrome_assert` let agents wait for page conditions and verify outcomes. Screenshots, console output, network capture, and `chrome_collect_debug_evidence` help explain failures instead of leaving the agent to guess.
+`scan` returns a bounded overview of the page: important text, form controls, buttons, and versioned element references. A reference is tied to the task, the scan, the frame, and Chrome's document ID, so even a refresh of the same URL rejects old references. The accessibility tree (`chrome_read_page`) and precise DOM queries (`chrome_query_elements`) are available underneath.
 
-### Spend fewer calls on plumbing
+The agent acts on references and selectors instead of guessing coordinates from screenshots. When it needs visual positioning or real input events, screenshots, mouse and keyboard tools, and CDP are there too.
 
-The CLI makes direct local JSON requests without a protocol handshake or a tool-catalog preload. Named sessions survive separate CLI processes, and `act` runs an ordered action sequence, checks an explicit postcondition, and returns a fresh scan in one command. The short Skill teaches reference lifetimes and failure handling; advanced schemas are loaded only when needed.
+### Wait, verify, and keep evidence
 
-All 39 browser capabilities remain available through the CLI and the same browser execution layer. This reduces agent-side round trips, repeated output, and upfront tool definitions. Node cold starts still have a cost; fewer calls do not imply that every browser action executes faster.
+`chrome_wait_for` waits for elements, text, URLs, network activity, or downloads, and `chrome_assert` checks the expected state, so the agent does not guess with fixed sleeps. Screenshots, console output, network capture, and `chrome_collect_debug_evidence` turn "I clicked and nothing happened" into something the agent can investigate.
 
-## What agents can do
+### Spend calls on the task
 
-- Read and operate already-authenticated dashboards, forms, and web applications.
-- Work across existing tabs, windows, tab groups, and page frames.
-- Click, fill, select, type, scroll, drag, upload files, and handle downloads or dialogs.
-- Verify page changes using elements, text, URLs, network activity, and assertions.
-- Inspect JavaScript, console messages, network requests, and performance traces.
-- Use bookmarks, history, and the clipboard within the connected Chrome profile.
+The CLI sends local JSON requests directly, with no protocol handshake and no full tool catalog to preload. `act` runs several actions, checks a postcondition, and returns a fresh scan in one command. The Skill holds the usage rules; advanced tools are looked up with `tools`, `describe`, and `call` only when needed.
+
+All 49 tools are available through the CLI. What shrinks is the agent's tool-definition context, repeated output, and round trips; each browser action still runs in the same extension, and starting Node still costs time.
+
+## What it can do
+
+| Area                      | Typical operations                                                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reading and locating      | Extract page content, scan interactive elements, read the accessibility tree, query the DOM, get element HTML                                                                                  |
+| Interaction               | Click, fill, select, type, scroll, drag, combined mouse actions                                                                                                                                |
+| Waiting and checks        | Wait for elements, text, URL changes, network activity, new tabs, and downloads; assert expected state                                                                                         |
+| Browser management        | Existing tabs and windows, tab groups, frames, history, bookmarks, clipboard                                                                                                                   |
+| Files and dialogs         | Upload files, check upload status, handle downloads and page dialogs                                                                                                                           |
+| Debugging and observation | Screenshots, JavaScript, console, network capture, cookies and all storage types, performance traces, CPU profiles, CSS coverage, heap instance counts                                         |
+| Page reverse engineering  | Search page scripts, inspect variables at breakpoints, hook fetch/XHR/functions, read WebSocket frames, intercept and replay requests, restore source maps, format, unpack, and decode offline |
+
+Good fits: reading data from logged-in dashboards, filling web forms, collecting information across tabs, checking web flows, and debugging front-end and network problems.
 
 ## How it works
 
@@ -49,31 +64,173 @@ All 39 browser capabilities remain available through the CLI and the same browse
 CLI -> AIEasyBrowser Native Server -> Chrome Native Messaging -> AIEasyBrowser extension -> your Chrome profile
 ```
 
-The extension starts the local bridge through Native Messaging. CLI requests go directly to `/browser`, with task state held in that existing bridge, not another daemon. The Skill guides the agent's targeting, references, and failure handling; the extension executes the browser actions.
+The extension starts the local bridge through Native Messaging. The CLI sends JSON requests to the local `/browser` endpoint, and task state lives in that bridge, so there is no extra daemon and no extra browser. The Skill teaches the agent how to choose targets, use references, and handle failures; it does not execute anything itself.
 
-## Getting started
+## Installation
 
-The [installation and configuration guide](README_zh.md#安装) covers source builds, extension loading, Native Host registration, CLI linking, and Skill installation. The canonical Skill is [`.agents/skills/aieasybrowser/SKILL.md`](.agents/skills/aieasybrowser/SKILL.md); it can be linked into user Skill directories without maintaining duplicate instructions.
+Requirements: Node.js 20+, Chrome or Chromium, and pnpm 8+ for source builds. Windows commands below use PowerShell 7.
 
-- Default CLI endpoint: `http://127.0.0.1:12307/browser` (loopback only)
-- Native Messaging host: `com.aieasybrowser.nativehost`
-- Stable extension ID: `coleelkpegcobndoloaofalgnkhiamll`
+### 1. Build from source
 
-## CLI workflow
+From the repository root:
 
-Select a named task session, choose an actual tab from `tabs`, then `scan`. Use the returned handles with `click`, `fill`, or a short `act` batch, and supply a site-specific `--expect` for asynchronous effects. Actions/checks/rescans return one JSON result per command.
+```powershell
+pnpm install --ignore-scripts
+pnpm run build
+```
 
-New scans and actions expire previous handles. `STALE_REF` or `STALE_DOCUMENT` requires a new scan. On failure, inspect `phase`, `actionStatus`, and `completed`: an assertion or scan failure after completed actions is not a reason to replay them, and `unknown` means a sent action may have happened. No automatic action replay or state recovery is performed after a bridge restart.
+Build output:
 
-Exit codes are `0` success, `2` invalid arguments, `3` operation/timeout failure, `4` connection/authentication/response failure, and `130` cancellation. Discover advanced capabilities with `tools`, `describe`, and `call` instead of loading the entire catalog. See the [CLI operation guide](README_zh.md#cli--skill) for copyable commands and target rules.
+- Chrome extension: `app/chrome-extension/.output/chrome-mv3`
+- Native Server: `app/native-server/dist`
 
-Configuration uses `AIEASYBROWSER_HOST`, `AIEASYBROWSER_PORT`, and the optional `AIEASYBROWSER_AUTH_TOKEN`. The Unix Node override is `AIEASYBROWSER_NODE_PATH`; Windows uses the recorded `node_path.txt`. The MCP endpoints, STDIO proxy, protocol profiles, and old `CHROME_MCP_*` / `MCP_HTTP_*` variables have been removed. Remove any previously configured AIEasyBrowser MCP entry from your agent client; the CLI retains all browser capabilities.
+### 2. Load the Chrome extension
 
-## Security and limitations
+Open `chrome://extensions/`, turn on Developer mode, choose "Load unpacked", and select `app/chrome-extension/.output/chrome-mv3`.
 
-AIEasyBrowser controls a real browser profile and its authenticated sessions. The bridge only listens on loopback; only connect trusted local agents.
+The project ships a fixed public key, so the extension ID is always `coleelkpegcobndoloaofalgnkhiamll`. Moving the source directory does not change it, and there is no key to generate or ID to enter.
 
-Automatic bridge connection does not remove Chrome's permission boundaries, debugger notifications, or a website's own authentication and security checks. Reusing an existing profile is not a promise to bypass Cloudflare, CAPTCHA, or automation detection.
+### 3. Register the Native Host
+
+From the repository root:
+
+```powershell
+pnpm --filter aieasybrowser-bridge exec node dist/cli.js register
+```
+
+This registers for the current user's Chrome. For Chromium, use:
+
+```powershell
+pnpm --filter aieasybrowser-bridge exec node dist/cli.js register --browser chromium
+```
+
+The Native Messaging host is `com.aieasybrowser.nativehost`. Registration never elevates privileges or installs system-wide, and package installation does not touch the browser registry.
+
+After registering, reload AIEasyBrowser once on the extensions page. While Chrome runs with the extension enabled, the extension connects to the bridge on its own.
+
+On Windows the launcher uses the Node.js path recorded in `node_path.txt` at build or registration time, not the `PATH` Chrome inherited. Register again after changing or moving Node.js or the build output; a missing or invalid path fails with a clear error.
+
+## CLI + Skill
+
+### Register the CLI command
+
+After building and registering the Native Host, run from the repository root:
+
+```powershell
+Push-Location app/native-server
+npm link --ignore-scripts --offline
+Pop-Location
+aieasybrowser health
+```
+
+This links the local CLI into the current Node.js global bin directory; nothing else is downloaded. Link again after switching Node.js versions. Without a global command, run `node app/native-server/dist/cli.js health` instead.
+
+The CLI connects to `http://127.0.0.1:12307/browser` by default. Pass `--url http://127.0.0.1:12307` or set the `AIEASYBROWSER_*` variables below to change it. The endpoint accepts only loopback clients and checks Host, Origin, and the optional bearer token.
+
+### Install the Skill
+
+The only Skill is `.agents/skills/aieasybrowser/SKILL.md`. Codex reads project `.agents/skills`; to use it in other projects, link it into your user Skill directories. Claude Code accepts directory links in `~/.claude/skills`.
+
+Run from the repository root in PowerShell 7. An existing directory with the same name makes the command fail instead of being overwritten:
+
+```powershell
+$skillSource = (Resolve-Path -LiteralPath '.agents/skills/aieasybrowser').Path
+New-Item -ItemType Directory -Force -Path "$HOME/.agents/skills", "$HOME/.claude/skills"
+New-Item -ItemType Junction -Path "$HOME/.agents/skills/aieasybrowser" -Target $skillSource
+New-Item -ItemType Junction -Path "$HOME/.claude/skills/aieasybrowser" -Target $skillSource
+```
+
+Update the links after moving the repository. See the [Codex docs](https://developers.openai.com/codex/skills/) and [Claude Code docs](https://code.claude.com/docs/en/skills) for how Skills are discovered.
+
+## Quick start
+
+```powershell
+aieasybrowser health
+aieasybrowser --session demo tabs --match github
+aieasybrowser --session demo use 123
+aieasybrowser --session demo scan
+aieasybrowser --session demo click <ref> --expect '{"kind":"text","text":"Results"}'
+```
+
+Replace the tab ID and ref with the values the previous step returned. `--session` names the task: keep the same name for one task and it remembers the selected tab and the latest scan. Each command prints one JSON object; check `ok`. Advanced tools such as screenshots, network capture, and breakpoints are found with `tools`, described with `describe`, and run with `call`.
+
+In daily use the agent issues these commands following the rules in the Skill: how to choose targets, when references expire, and when a failure may be retried. You describe the task and check the result.
+
+## Known limitations
+
+- No JavaScript coverage or heap snapshot: Chrome does not give extensions the Profiler or HeapProfiler domains. CSS coverage, CPU profiles, and per-constructor instance counts work.
+- Binary WebSocket frames are returned as-is; there is no zlib/brotli decompression.
+- Trusted clicks inside cross-site iframes are unreliable and sometimes reach only the iframe container; cause not identified.
+- `stop` of a debugging session held for a long time occasionally times out; cause not identified.
+- Chrome shows its debugging banner while debugging tools run.
+
+`docs/BROWSER-PLAN.md` records how each of these was checked.
+
+## Local connection settings
+
+The defaults work as they are. To change them, set:
+
+| Variable                   | Default     | Purpose                                                                                                         |
+| -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `AIEASYBROWSER_HOST`       | `127.0.0.1` | Bridge listen address, CLI target, and the address the extension build probes; loopback only, no scheme or port |
+| `AIEASYBROWSER_PORT`       | `12307`     | Port for the CLI and doctor; must match the port the extension uses, `1..65535`                                 |
+| `AIEASYBROWSER_AUTH_TOKEN` | unset       | Optional local bearer token; the bridge and CLI must use the same value, no inner whitespace                    |
+| `AIEASYBROWSER_NODE_PATH`  | unset       | Node.js path override for the Unix launcher; Windows uses `node_path.txt` only                                  |
+
+The extension supplies the listen port through Native Messaging, so setting these variables in a terminal does not reconfigure a bridge that is already running. If you change the host, the extension build environment and the Native Host runtime must agree.
+
+The MCP endpoints (`/mcp`, `/sse`, `/messages`) and the STDIO proxy have been removed, and the old `CHROME_MCP_*` and `MCP_HTTP_*` variables are no longer read; every browser capability remains in the CLI. If an agent client still has this project configured as an MCP server, remove that entry, for example in Codex:
+
+```powershell
+codex mcp remove aieasybrowser
+```
+
+## Health check and diagnostics
+
+Run `aieasybrowser health` and confirm the extension name is `AIEasyBrowser`, the extension ID is `coleelkpegcobndoloaofalgnkhiamll`, `nativeHost.serverStatus.isRunning` is `true`, and `schema.toolCount` is 49.
+
+If installation or startup fails, run the diagnostics from the repository root:
+
+```powershell
+pnpm --filter aieasybrowser-bridge exec node dist/cli.js doctor
+```
+
+Reload the extension on the extensions page after rebuilding it or registering the Native Host again. `log lock busy` means another process is writing logs or running diagnostics; retry later, and do not delete a `native-server.log.lock` that a live process still holds.
+
+## Security and permissions
+
+AIEasyBrowser controls a real Chrome profile and its logged-in sessions. The bridge listens on loopback only; give CLI access only to trusted local agents. There is no remote listening option.
+
+Connecting automatically does not lift Chrome's permission boundaries. Debugging tools show Chrome's debugging banner and may compete with DevTools or other extensions for the same tab. A site's own login, CAPTCHA, Cloudflare, and risk checks still apply; reusing an existing profile is not a promise to bypass them. The extension cannot read Chrome's internal pages.
+
+## Development and tests
+
+From the repository root:
+
+```powershell
+pnpm run typecheck
+pnpm lint
+pnpm test
+pnpm run build
+```
+
+`pnpm test` runs unit tests and needs no browser. The real-browser acceptance scripts connect to the running bridge and extension: build first, reload the extension on the extensions page, and check that `aieasybrowser health` reports the `schema.hash` of this build.
+
+```powershell
+pnpm test:cli-regression
+pnpm test:cli-long-task
+pnpm test:cli-cdp-session
+pnpm test:cli-cdp-scripts
+pnpm test:cli-cdp-debugger
+pnpm test:cli-cdp-contexts
+pnpm test:cli-cdp-inject
+pnpm test:cli-cdp-network
+pnpm test:cli-cdp-storage
+pnpm test:cli-cdp-profile
+pnpm test:cli-analysis
+```
+
+`test:cli-regression` needs access to GitHub; the others use local temporary pages only. Scripts touch only the tabs they open and the data they write, and clean everything up at the end; a failure or a failed cleanup exits non-zero.
 
 ## License
 
