@@ -10,6 +10,8 @@ import {
   compressImage,
 } from '../../../../utils/image-utils';
 import { screenshotContextManager } from '@/utils/screenshot-context';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
+import { waitForDownload } from './download';
 
 // Screenshot-specific constants
 const SCREENSHOT_CONSTANTS = {
@@ -19,6 +21,7 @@ const SCREENSHOT_CONSTANTS = {
   MAX_CAPTURE_HEIGHT_PX: 50000, // Maximum height in pixels to capture
   PIXEL_TOLERANCE: 1,
   SCRIPT_INIT_DELAY: 100, // Delay for script initialization
+  SAVE_TIMEOUT_MS: 60_000, // Maximum wait for the PNG download to finish on disk
 } as {
   readonly SCROLL_DELAY_MS: number;
   CAPTURE_STITCH_DELAY_MS: number; // This one is mutable
@@ -26,6 +29,7 @@ const SCREENSHOT_CONSTANTS = {
   readonly MAX_CAPTURE_HEIGHT_PX: number;
   readonly PIXEL_TOLERANCE: number;
   readonly SCRIPT_INIT_DELAY: number;
+  readonly SAVE_TIMEOUT_MS: number;
 };
 
 // Adjust CAPTURE_STITCH_DELAY_MS to respect Chrome's capture rate if available in runtime
@@ -219,7 +223,10 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
   /**
    * Execute screenshot operation
    */
-  async execute(args: ScreenshotToolParams): Promise<ToolResult> {
+  async execute(
+    args: ScreenshotToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
     const { name = 'screenshot', selector, storeBase64 = false, fullPage = false } = args;
     const savePng =
       typeof args.savePng === 'boolean' ? args.savePng : storeBase64 === true ? false : true;
@@ -414,22 +421,17 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
 
           results.downloadId = downloadId;
           results.filename = filename;
+
+          // The download item's filename is empty until Chrome picks the target path,
+          // so wait for completion instead of reading it after a fixed delay.
+          const download = await waitForDownload({
+            id: downloadId,
+            waitForComplete: true,
+            timeoutMs: SCREENSHOT_CONSTANTS.SAVE_TIMEOUT_MS,
+            signal: executionContext?.signal,
+          });
           results.fileSaved = true;
-
-          // Try to get the full file path
-          try {
-            // Wait a moment to ensure download info is updated
-            await new Promise((resolve) => setTimeout(resolve, 100));
-
-            // Search for download item to get full path
-            const [downloadItem] = await chrome.downloads.search({ id: downloadId });
-            if (downloadItem && downloadItem.filename) {
-              // Add full path to response
-              results.fullPath = downloadItem.filename;
-            }
-          } catch (pathError) {
-            console.warn('Could not get full file path:', pathError);
-          }
+          results.fullPath = download.fullPath;
         } catch (error) {
           console.error('Error saving PNG file:', error);
           results.saveError = String(error instanceof Error ? error.message : error);
