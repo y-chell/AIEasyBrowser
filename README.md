@@ -10,6 +10,12 @@ AIEasyBrowser is a browser control tool for AI agents, driven through a CLI and 
 
 The goal is to make browser control easier, faster, and more accurate for agents: fewer human interruptions when connecting, page elements the agent can target directly, and an observable, checkable result after every action.
 
+## Intro video
+
+Under-two-minute overview with a real run against this repository (Chinese narration, burned-in subtitles):
+
+https://github.com/user-attachments/assets/30ccdb36-47f8-4592-a971-d7bf1bbd7e2c
+
 ## Why AIEasyBrowser
 
 Early browser tools were built for human-AI collaboration: a person approved the connection, picked elements, and drove the interface while the AI helped with some steps. Agents can now plan and execute on their own, so a browser tool should offer a clear execution interface instead of handing the task back to a person.
