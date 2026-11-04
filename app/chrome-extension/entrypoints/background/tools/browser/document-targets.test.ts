@@ -3,6 +3,14 @@ import { BaseBrowserToolExecutor } from '../base-browser';
 import { clickTool, fillTool } from './interaction';
 import { keyboardTool } from './keyboard';
 import { scanCompactTool } from './scan-compact';
+import { cdpSessionManager } from '@/utils/cdp-session-manager';
+
+vi.mock('@/utils/cdp-session-manager', () => ({
+  cdpSessionManager: {
+    sendCommand: vi.fn(async () => ({})),
+    withSession: vi.fn(async (_tabId: number, _owner: string, fn: () => Promise<unknown>) => fn()),
+  },
+}));
 
 class HelperHarness extends BaseBrowserToolExecutor {
   name = 'fixture';
@@ -122,6 +130,82 @@ describe('document-targeted Chrome APIs', () => {
       expect(options).toEqual({ documentId: 'iframe-doc' });
     for (const [details] of vi.mocked(chrome.scripting.executeScript).mock.calls)
       expect(details.target).toEqual({ tabId: 7, documentIds: ['iframe-doc'] });
+  });
+});
+
+describe('trusted click and keyboard input', () => {
+  beforeEach(() => vi.mocked(cdpSessionManager.sendCommand).mockClear());
+
+  test('resolves the ref in the bound document, then clicks over CDP instead of in the page', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValue({
+      success: true,
+      elementInfo: { tagName: 'DIV' },
+      point: { x: 40, y: 12 },
+    });
+    const result = await clickTool.execute(
+      { tabId: 7, ref: 'ref_1', trusted: true },
+      { documentId: 'top-doc' },
+    );
+    expect(result.isError).toBe(false);
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      7,
+      expect.objectContaining({ ref: 'ref_1', resolveOnly: true }),
+      { documentId: 'top-doc' },
+    );
+    const sent = vi.mocked(cdpSessionManager.sendCommand).mock.calls;
+    expect(sent.map(([, method, params]) => [method, (params as any).type])).toEqual([
+      ['Input.dispatchMouseEvent', 'mouseMoved'],
+      ['Input.dispatchMouseEvent', 'mousePressed'],
+      ['Input.dispatchMouseEvent', 'mouseReleased'],
+    ]);
+    expect(sent[1][2]).toMatchObject({ x: 40, y: 12 });
+    expect(JSON.parse((result.content[0] as any).text)).toMatchObject({ clickMethod: 'trusted' });
+  });
+
+  test('sends no input when the trusted click target is not interactable', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValue({
+      error: 'NOT_INTERACTABLE: element is hidden, blocked, or not hit-testable',
+    });
+    const failed = await clickTool.execute({ tabId: 7, ref: 'ref_1', trusted: true });
+    expect(failed.isError).toBe(true);
+    expect(cdpSessionManager.sendCommand).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [{ frameId: 5, ref: 'ref_1' }, 'TRUSTED_FRAME_UNSUPPORTED'],
+    [{ coordinates: { x: 1, y: 1 } }, 'trusted click takes a ref or selector'],
+  ])('rejects trusted click %j before touching the page', async (target, message) => {
+    const failed = await clickTool.execute({ tabId: 7, trusted: true, ...target });
+    expect(failed.isError).toBe(true);
+    expect((failed.content[0] as any).text).toContain(message);
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(cdpSessionManager.sendCommand).not.toHaveBeenCalled();
+  });
+
+  test('sends trusted keys over CDP without injecting the DOM keyboard helper', async () => {
+    const result = await keyboardTool.execute({ tabId: 7, keys: 'Ctrl+A, Enter', trusted: true });
+    expect(result.isError).toBe(false);
+    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+    const types = vi
+      .mocked(cdpSessionManager.sendCommand)
+      .mock.calls.map(([, , params]) => [(params as any).type, (params as any).key]);
+    expect(types).toEqual([
+      ['rawKeyDown', 'a'],
+      ['keyUp', 'a'],
+      ['keyDown', 'Enter'],
+      ['keyUp', 'Enter'],
+    ]);
+  });
+
+  test.each([
+    [{ keys: 'Enter, NotAKey' }, 'unknown key'],
+    [{ keys: 'Enter', selector: '#q' }, 'focus it first'],
+    [{ keys: 'Enter', frameId: 5 }, 'TRUSTED_FRAME_UNSUPPORTED'],
+  ])('rejects trusted keys %j before sending any', async (args, message) => {
+    const failed = await keyboardTool.execute({ tabId: 7, trusted: true, ...args });
+    expect(failed.isError).toBe(true);
+    expect((failed.content[0] as any).text).toContain(message);
+    expect(cdpSessionManager.sendCommand).not.toHaveBeenCalled();
   });
 });
 

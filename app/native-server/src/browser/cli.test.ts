@@ -185,6 +185,14 @@ describe('browser CLI grammar and HTTP transport', () => {
       { command: 'act', actions: [{ op: 'press', keys: 'Enter', frameId: 5 }] },
     ],
     [
+      ['click', 'ref', '--trusted'],
+      { command: 'act', actions: [{ op: 'click', ref: 'ref', double: false, trusted: true }] },
+    ],
+    [
+      ['press', 'Enter', '--trusted'],
+      { command: 'act', actions: [{ op: 'press', keys: 'Enter', trusted: true }] },
+    ],
+    [
       ['wait', '{"kind":"url","value":"github.com"}', '--no-scan'],
       { command: 'wait', scan: false },
     ],

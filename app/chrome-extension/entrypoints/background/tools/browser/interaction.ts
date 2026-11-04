@@ -4,6 +4,7 @@ import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
+import { dispatchMouseClick, modifierMask, withTrustedInput } from './cdp-input';
 
 interface Coordinates {
   x: number;
@@ -19,6 +20,7 @@ interface ClickToolParams {
   timeout?: number; // Timeout in milliseconds for waiting for the element or navigation
   frameId?: number; // Target frame for ref/selector resolution
   double?: boolean; // Perform double click when true
+  trusted?: boolean; // Dispatch trusted CDP mouse input at the element center (top frame only)
   button?: 'left' | 'right' | 'middle';
   bubbles?: boolean;
   cancelable?: boolean;
@@ -113,6 +115,20 @@ class ClickTool extends BaseBrowserToolExecutor {
       }
 
       targetFrameId = this.resolveFrameIdForRef(tab.id, finalRef, targetFrameId);
+      if (args.trusted === true) {
+        if (coordinates || waitForNavigation) {
+          return createErrorResponse(
+            ERROR_MESSAGES.INVALID_PARAMETERS +
+              ': trusted click takes a ref or selector, without coordinates or waitForNavigation',
+          );
+        }
+        // CDP mouse coordinates are top-level viewport pixels; iframe offsets are not mapped.
+        if (typeof targetFrameId === 'number' && targetFrameId !== 0) {
+          return createErrorResponse(
+            'TRUSTED_FRAME_UNSUPPORTED: trusted click only targets the top frame; use chrome_computer coordinates for iframes',
+          );
+        }
+      }
       await this.injectContentScript(
         tab.id,
         ['inject-scripts/click-helper.js'],
@@ -123,6 +139,44 @@ class ClickTool extends BaseBrowserToolExecutor {
         documentId,
       );
       executionContext?.signal?.throwIfAborted();
+
+      if (args.trusted === true) {
+        const resolved = await this.sendMessageToTab(
+          tab.id,
+          {
+            action: TOOL_MESSAGE_TYPES.CLICK_ELEMENT,
+            selector: finalSelector,
+            ref: finalRef,
+            resolveOnly: true,
+          },
+          0,
+          documentId,
+        );
+        executionContext?.signal?.throwIfAborted();
+        const tabId = tab.id;
+        await withTrustedInput(tabId, () =>
+          dispatchMouseClick(tabId, resolved.point, {
+            button,
+            clickCount: args.double === true ? 2 : 1,
+            modifiers: modifierMask(modifiers),
+          }),
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                message: 'Trusted click dispatched',
+                elementInfo: resolved.elementInfo,
+                clickMethod: 'trusted',
+                point: resolved.point,
+              }),
+            },
+          ],
+          isError: false,
+        };
+      }
 
       // Send click message to content script
       const result = await this.sendMessageToTab(

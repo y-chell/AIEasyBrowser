@@ -294,8 +294,16 @@ export function registerBrowserCommands(program: Command): void {
   });
   actionOptions(program.command('click <ref>').description('Click a ref from the latest scan'))
     .option('--double', 'Double-click the element')
+    .option('--trusted', 'Send trusted CDP mouse input (top frame only)')
     .action((ref, options, command) =>
-      act(command, [{ op: 'click', ref, double: Boolean(options.double) }]),
+      act(command, [
+        {
+          op: 'click',
+          ref,
+          double: Boolean(options.double),
+          ...(options.trusted ? { trusted: true } : {}),
+        },
+      ]),
     );
   actionOptions(
     program
@@ -314,8 +322,16 @@ export function registerBrowserCommands(program: Command): void {
     .option('--frame <id>', 'Target scanned frame', (value) =>
       parseInteger(value, 0, Number.MAX_SAFE_INTEGER),
     )
+    .option('--trusted', 'Send trusted CDP key events to the focused element')
     .action((keys, options, command) =>
-      act(command, [{ op: 'press', keys, frameId: options.frame }]),
+      act(command, [
+        {
+          op: 'press',
+          keys,
+          frameId: options.frame,
+          ...(options.trusted ? { trusted: true } : {}),
+        },
+      ]),
     );
   program
     .command('wait <json>')

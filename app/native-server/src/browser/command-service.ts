@@ -556,7 +556,12 @@ export class BrowserCommandService {
               );
             return {
               name: 'chrome_keyboard',
-              args: { tabId, frameId, keys: action.keys },
+              args: {
+                tabId,
+                frameId,
+                keys: action.keys,
+                ...(action.trusted ? { trusted: true } : {}),
+              },
               documentId,
             };
           }
@@ -572,7 +577,9 @@ export class BrowserCommandService {
               tabId,
               frameId: target.frameId,
               ref: target.ref,
-              ...(action.op === 'click' ? { double: action.double } : { value: action.value }),
+              ...(action.op === 'click'
+                ? { double: action.double, ...(action.trusted ? { trusted: true } : {}) }
+                : { value: action.value }),
             },
             documentId: target.documentId,
           };

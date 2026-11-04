@@ -260,11 +260,11 @@ describe('direct browser capability contracts', () => {
     };
     for (const tool of TOOL_SCHEMAS) visit(tool.inputSchema);
     expect(counts).toEqual({
-      type: 618,
+      type: 620,
       properties: 63,
       required: 58,
       additionalProperties: 63,
-      description: 515,
+      description: 517,
       enum: 55,
       oneOf: 5,
       items: 11,

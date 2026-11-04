@@ -4,6 +4,7 @@ import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
+import { dispatchKeyChord, parseKeyChord, withTrustedInput } from './cdp-input';
 
 interface KeyboardToolParams {
   keys: string; // Required: string representing keys or key combinations to simulate (e.g., "Enter", "Ctrl+C")
@@ -13,6 +14,7 @@ interface KeyboardToolParams {
   tabId?: number; // target existing tab id
   windowId?: number; // when no tabId, pick active tab from this window
   frameId?: number; // target frame id for iframe support
+  trusted?: boolean; // Dispatch trusted CDP key events to the focused element
 }
 
 /**
@@ -45,6 +47,49 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       const tab = explicit || (await this.getActiveTabOrThrowInWindow(args.windowId));
       if (!tab.id) {
         return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
+      }
+
+      if (args.trusted === true) {
+        if (selector) {
+          return createErrorResponse(
+            ERROR_MESSAGES.INVALID_PARAMETERS +
+              ': trusted keys go to the focused element; focus it first instead of passing selector',
+          );
+        }
+        if (typeof args.frameId === 'number' && args.frameId !== 0) {
+          return createErrorResponse(
+            'TRUSTED_FRAME_UNSUPPORTED: trusted keys go to the page focus, not a chosen frame',
+          );
+        }
+        const combos = keys
+          .split(',')
+          .map((k) => k.trim())
+          .filter(Boolean);
+        // Parse everything first so an unknown key fails before any input is sent.
+        combos.forEach((combo) => parseKeyChord(combo));
+        const tabId = tab.id;
+        await withTrustedInput(tabId, async () => {
+          for (const [index, combo] of combos.entries()) {
+            executionContext?.signal?.throwIfAborted();
+            await dispatchKeyChord(tabId, combo);
+            if (delay > 0 && index < combos.length - 1) {
+              await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+          }
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                message: `Trusted key events dispatched: ${keys}`,
+                trusted: true,
+              }),
+            },
+          ],
+          isError: false,
+        };
       }
 
       let finalSelector = selector;

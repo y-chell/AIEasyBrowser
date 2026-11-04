@@ -303,6 +303,30 @@ describe('named CLI browser workflows', () => {
     expect((await run({ command: 'session' })).result).toMatchObject({ refs: 0 });
   });
 
+  test('passes trusted only when requested for click and press', async () => {
+    const ref = await selectedScan();
+    send.mockClear();
+    await run({
+      command: 'act',
+      actions: [
+        { op: 'click', ref, trusted: true },
+        { op: 'press', keys: 'Enter', trusted: true },
+      ],
+      scan: false,
+    });
+    const [click, press] = send.mock.calls.map(([payload]) => payload);
+    expect(click).toMatchObject({ name: 'chrome_click_element', args: { trusted: true } });
+    expect(press).toMatchObject({
+      name: 'chrome_keyboard',
+      args: { keys: 'Enter', trusted: true },
+    });
+
+    const plain = await selectedScan();
+    send.mockClear();
+    await run({ command: 'act', actions: [{ op: 'click', ref: plain }], scan: false });
+    expect(send.mock.calls[0][0].args).not.toHaveProperty('trusted');
+  });
+
   test('rejects foreign-session handles and validates the entire batch before dispatch', async () => {
     const ref = await selectedScan('A');
     await selectedScan('B');

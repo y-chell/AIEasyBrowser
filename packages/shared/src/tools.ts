@@ -2404,6 +2404,11 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
           type: 'boolean',
           description: 'Perform double click when true (default: false).',
         },
+        trusted: {
+          type: 'boolean',
+          description:
+            'Dispatch trusted CDP mouse input at the ref/selector center instead of synthetic DOM events, so the page gets user activation (window.open, isTrusted checks). Top frame only; not with coordinates or waitForNavigation. Default: false.',
+        },
         button: {
           type: 'string',
           enum: ['left', 'right', 'middle'],
@@ -2508,6 +2513,11 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         delay: {
           type: 'number',
           description: 'Delay between keystrokes in milliseconds (default: 50).',
+        },
+        trusted: {
+          type: 'boolean',
+          description:
+            'Dispatch trusted CDP key events to the element focused in the page instead of synthetic DOM events; needed when the site ignores untrusted keys (e.g. Enter that submits a search). Not with selector or a non-top frameId. Default: false.',
         },
         tabId: {
           type: 'number',

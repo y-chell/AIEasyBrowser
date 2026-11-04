@@ -47,7 +47,12 @@ export const browserConditionSchema = z.discriminatedUnion('kind', [
 
 export const browserActionSchema = z.discriminatedUnion('op', [
   z
-    .object({ op: z.literal('click'), ref: z.string().min(1), double: z.boolean().optional() })
+    .object({
+      op: z.literal('click'),
+      ref: z.string().min(1),
+      double: z.boolean().optional(),
+      trusted: z.boolean().optional(),
+    })
     .strict(),
   z
     .object({
@@ -57,7 +62,12 @@ export const browserActionSchema = z.discriminatedUnion('op', [
     })
     .strict(),
   z
-    .object({ op: z.literal('press'), keys: z.string().min(1), frameId: frameId.optional() })
+    .object({
+      op: z.literal('press'),
+      keys: z.string().min(1),
+      frameId: frameId.optional(),
+      trusted: z.boolean().optional(),
+    })
     .strict(),
 ]);
 

@@ -11,8 +11,7 @@ import { waitForCapturedRequest } from './network-capture';
 import { screenshotContextManager } from '@/utils/screenshot-context';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import type { BrowserToolExecutionContext } from '../browser-session-context';
-
-type MouseButton = 'left' | 'right' | 'middle';
+import { dispatchKeyChord, parseKeyChord, type MouseButton } from './cdp-input';
 
 interface Coordinates {
   x: number;
@@ -150,86 +149,6 @@ class CDPHelper {
     let mask = 0;
     for (const m of mods) mask |= map[m] || 0;
     return mask;
-  }
-
-  // Enhanced key mapping for common non-character keys
-  private static KEY_ALIASES: Record<string, { key: string; code?: string; text?: string }> = {
-    enter: { key: 'Enter', code: 'Enter' },
-    return: { key: 'Enter', code: 'Enter' },
-    backspace: { key: 'Backspace', code: 'Backspace' },
-    delete: { key: 'Delete', code: 'Delete' },
-    tab: { key: 'Tab', code: 'Tab' },
-    escape: { key: 'Escape', code: 'Escape' },
-    esc: { key: 'Escape', code: 'Escape' },
-    space: { key: ' ', code: 'Space', text: ' ' },
-    pageup: { key: 'PageUp', code: 'PageUp' },
-    pagedown: { key: 'PageDown', code: 'PageDown' },
-    home: { key: 'Home', code: 'Home' },
-    end: { key: 'End', code: 'End' },
-    arrowup: { key: 'ArrowUp', code: 'ArrowUp' },
-    arrowdown: { key: 'ArrowDown', code: 'ArrowDown' },
-    arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft' },
-    arrowright: { key: 'ArrowRight', code: 'ArrowRight' },
-  };
-
-  private static resolveKeyDef(token: string): { key: string; code?: string; text?: string } {
-    const t = (token || '').toLowerCase();
-    if (this.KEY_ALIASES[t]) return this.KEY_ALIASES[t];
-    if (/^f([1-9]|1[0-2])$/.test(t)) {
-      return { key: t.toUpperCase(), code: t.toUpperCase() };
-    }
-    if (t.length === 1) {
-      const upper = t.toUpperCase();
-      return { key: upper, code: `Key${upper}`, text: t };
-    }
-    return { key: token };
-  }
-
-  static async dispatchSimpleKey(tabId: number, token: string) {
-    const def = this.resolveKeyDef(token);
-    if (def.text && def.text.length === 1) {
-      await this.insertText(tabId, def.text);
-      return;
-    }
-    await this.send(tabId, 'Input.dispatchKeyEvent', {
-      type: 'rawKeyDown',
-      key: def.key,
-      code: def.code,
-    });
-    await this.send(tabId, 'Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: def.key,
-      code: def.code,
-    });
-  }
-
-  static async dispatchKeyChord(tabId: number, chord: string) {
-    const parts = chord.split('+');
-    const modifiers: string[] = [];
-    let keyToken = '';
-    for (const pRaw of parts) {
-      const p = pRaw.trim().toLowerCase();
-      if (
-        ['ctrl', 'control', 'alt', 'shift', 'cmd', 'meta', 'command', 'win', 'windows'].includes(p)
-      )
-        modifiers.push(p);
-      else keyToken = pRaw.trim();
-    }
-    const mask = this.modifierMask(modifiers);
-    const def = this.resolveKeyDef(keyToken);
-    await this.send(tabId, 'Input.dispatchKeyEvent', {
-      type: 'rawKeyDown',
-      key: def.key,
-      code: def.code,
-      text: def.text,
-      modifiers: mask,
-    });
-    await this.send(tabId, 'Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: def.key,
-      code: def.code,
-      modifiers: mask,
-    });
   }
 }
 
@@ -1488,6 +1407,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
         if (!Number.isInteger(repeat) || repeat < 1 || repeat > 100) {
           return createErrorResponse('repeat must be an integer between 1 and 100 for key action');
         }
+        // Reject unknown keys before any input is sent, so the DOM fallback below never sees them.
+        try {
+          tokens.forEach((t) => parseKeyChord(t));
+        } catch (e) {
+          return createErrorResponse(e instanceof Error ? e.message : String(e));
+        }
         try {
           // Optional focus via ref before key events
           if (params.ref) {
@@ -1499,10 +1424,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
           }
           await CDPHelper.attach(tab.id);
           for (let i = 0; i < repeat; i++) {
-            for (const t of tokens) {
-              if (t.includes('+')) await CDPHelper.dispatchKeyChord(tab.id, t);
-              else await CDPHelper.dispatchSimpleKey(tab.id, t);
-            }
+            for (const t of tokens) await dispatchKeyChord(tab.id, t);
           }
           await CDPHelper.detach(tab.id);
           return {

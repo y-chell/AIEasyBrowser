@@ -180,6 +180,11 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
         return { error: 'NOT_INTERACTABLE: element is hidden, blocked, or not hit-testable' };
       }
 
+      // Trusted clicks are dispatched by the background over CDP at this viewport point.
+      if (options.resolveOnly) {
+        return { success: true, elementInfo, point: { x: clickX, y: clickY } };
+      }
+
       let navigationPromise;
       if (waitForNavigation) {
         navigationPromise = new Promise((resolve) => {
@@ -372,6 +377,7 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
           bubbles: request.bubbles,
           cancelable: request.cancelable,
           modifiers: request.modifiers,
+          resolveOnly: request.resolveOnly === true,
         },
       )
         .then(sendResponse)
