@@ -14,7 +14,7 @@ describe('independent project branding', () => {
     '../../packages/shared/package.json',
   ])('starts %s at the independent project version', (relativePath) => {
     const pkg = JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8'));
-    expect(pkg.version).toBe('0.1.0');
+    expect(pkg.version).toBe('0.2.0');
     expect(pkg.version).not.toBe('1.0.20');
   });
 
