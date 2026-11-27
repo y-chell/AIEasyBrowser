@@ -1,5 +1,14 @@
 module.exports = {
   preset: 'ts-jest',
+  // Fastify's injection dependency cookie is ESM; Jest 29 needs it transformed
+  // even though Node 24 can require it directly. Cover pnpm's two node_modules levels.
+  transform: {
+    '^.+\\.jsx?$': [
+      'ts-jest',
+      { tsconfig: { allowJs: true, checkJs: false, module: 'CommonJS', moduleResolution: 'Node' } },
+    ],
+  },
+  transformIgnorePatterns: ['[/\\\\]node_modules[/\\\\](?!\\.pnpm[/\\\\]cookie@|cookie[/\\\\])'],
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],

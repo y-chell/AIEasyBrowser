@@ -29,7 +29,7 @@ jobs:
           package-manager-cache: false
 
       - name: Setup pnpm
-        run: npm install --global pnpm@8.15.9
+        run: npm install --global "$(node -p "require('./package.json').packageManager")"
 
       - name: Resolve release meta
         id: meta

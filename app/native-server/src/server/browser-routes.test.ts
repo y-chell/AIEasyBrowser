@@ -5,6 +5,15 @@ import { BRIDGE_ENV } from '../constant';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { Server } from './index';
 
+// These route tests mock Chrome IO; display power changes belong to their own tests.
+jest.mock('../browser/display-awake', () => ({
+  ...jest.requireActual<typeof import('../browser/display-awake')>('../browser/display-awake'),
+  withDisplayAwake: async (run: () => Promise<unknown>, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    return run();
+  },
+}));
+
 let server: Server;
 let send: jest.Mock<NativeMessagingHost['sendRequestToExtensionAndWait']>;
 const success = (data: unknown) => ({
