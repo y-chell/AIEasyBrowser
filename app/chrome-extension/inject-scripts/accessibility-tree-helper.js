@@ -482,9 +482,12 @@
     if (!isVisible(el)) return false;
     if (cfg.filter !== 'all') {
       const r = /** @type {HTMLElement} */ (el).getBoundingClientRect();
-      if (
-        !(r.top < window.innerHeight && r.bottom > 0 && r.left < window.innerWidth && r.right > 0)
-      )
+      if (!(
+        r.top < window.innerHeight &&
+        r.bottom > 0 &&
+        r.left < window.innerWidth &&
+        r.right > 0
+      ))
         return false;
     }
     if (cfg.filter === 'interactive') return isInteractive(el);
@@ -680,18 +683,35 @@
 
   function inferSafeLabel(el) {
     const tag = el.tagName.toLowerCase();
-    const aria = el.getAttribute('aria-label');
-    if (aria && aria.trim()) return aria.trim();
-    const placeholder = el.getAttribute('placeholder');
-    if (placeholder && placeholder.trim()) return placeholder.trim();
-    const title = el.getAttribute('title');
-    if (title && title.trim()) return title.trim();
-    if (/** @type {HTMLElement} */ (el).id) {
-      const lab = document.querySelector(
-        `label[for="${cssEscape(/** @type {HTMLElement} */ (el).id)}"]`,
-      );
-      if (lab && lab.textContent && lab.textContent.trim()) return lab.textContent.trim();
-    }
+    const root = el.getRootNode();
+    // Read label text, never the value of a referenced form control.
+    const labelText = (label) =>
+      label && !['input', 'textarea', 'select'].includes(label.tagName.toLowerCase())
+        ? normalizeText(label.textContent || '')
+        : '';
+    const labelled = normalizeText(
+      (el.getAttribute('aria-labelledby') || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => labelText(root.getElementById(id)))
+        .join(' '),
+    );
+    if (labelled) return labelled;
+    const aria = normalizeText(el.getAttribute('aria-label') || '');
+    if (aria) return aria;
+    const labels = el.labels
+      ? Array.from(el.labels)
+      : [
+          el.id ? root.querySelector(`label[for="${cssEscape(el.id)}"]`) : null,
+          el.closest('label'),
+        ];
+    const associated = normalizeText([...new Set(labels)].map(labelText).join(' '));
+    if (associated) return associated;
+    const placeholder = normalizeText(el.getAttribute('placeholder') || '');
+    if (placeholder) return placeholder;
+    const title = normalizeText(el.getAttribute('title') || '');
+    if (title) return title;
     if (['input', 'textarea', 'select'].includes(tag)) return '';
     return inferLabel(el) || normalizeText(el.textContent || '');
   }
@@ -776,12 +796,18 @@
 
   function summarizeCompactElement(el, options = {}) {
     const ref = getOrCreateRef(el);
+    const label = inferSafeLabel(el);
+    const visibleText = ['button', 'a', 'summary'].includes(el.tagName.toLowerCase())
+      ? normalizeText(typeof el.innerText === 'string' ? el.innerText : el.textContent || '')
+      : '';
+    const text = visibleText || label;
     return {
       ref,
       kind: compactElementKind(el),
       tag: el.tagName.toLowerCase(),
       role: inferRole(el),
-      text: compactText(inferSafeLabel(el), 120),
+      text: compactText(text, 120),
+      ...(label && label !== text ? { label: compactText(label, 120) } : {}),
       selector: generateSelector(el),
       visible: isVisible(el),
       enabled: isEnabled(el),
@@ -870,6 +896,72 @@
     };
   }
 
+  // Compact scans spend their budget on what is currently on screen. Keep this
+  // separate from isVisible: DOM queries and actions also need offscreen targets.
+  function createCompactElementRanker() {
+    const styles = new WeakMap();
+    const styleOf = (el) => {
+      if (!styles.has(el)) styles.set(el, window.getComputedStyle(el));
+      return styles.get(el);
+    };
+    const parentOf = (el) => el.assignedSlot || el.parentElement || el.getRootNode()?.host;
+    const clips = (value) => /^(auto|scroll|hidden|clip|overlay)$/.test(value);
+
+    return (el) => {
+      const rect = el.getBoundingClientRect();
+      let left = Math.max(0, rect.left);
+      let top = Math.max(0, rect.top);
+      let right = Math.min(window.innerWidth, rect.right);
+      let bottom = Math.min(window.innerHeight, rect.bottom);
+      let inDialog = false;
+      let inNavigation = false;
+      for (let current = el; current instanceof Element; current = parentOf(current)) {
+        const style = styleOf(current);
+        // Ancestor hiding is not reflected in the control's own computed style.
+        // aria-hidden also excludes offscreen mirror inputs used by UI libraries.
+        if (
+          style.display === 'none' ||
+          style.opacity === '0' ||
+          current.getAttribute('aria-hidden') === 'true' ||
+          (current.tagName.toLowerCase() === 'dialog' && !current.hasAttribute('open'))
+        ) {
+          return null;
+        }
+        if (
+          current.matches(
+            'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]',
+          )
+        ) {
+          inDialog = true;
+        }
+        // Unsupported pseudo-classes must not break scans on older Chromium.
+        try {
+          if (current.matches(':popover-open')) inDialog = true;
+        } catch (_) {}
+        if (
+          current.matches(
+            'nav, header, aside, footer, [role="navigation"], [role="banner"], [role="complementary"], [role="contentinfo"]',
+          )
+        ) {
+          inNavigation = true;
+        }
+        if (current !== el && (clips(style.overflowX) || clips(style.overflowY))) {
+          const clip = current.getBoundingClientRect();
+          if (clips(style.overflowX)) {
+            left = Math.max(left, clip.left);
+            right = Math.min(right, clip.right);
+          }
+          if (clips(style.overflowY)) {
+            top = Math.max(top, clip.top);
+            bottom = Math.min(bottom, clip.bottom);
+          }
+        }
+      }
+      if (right <= left || bottom <= top) return 3;
+      return inDialog ? 0 : inNavigation ? 2 : 1;
+    };
+  }
+
   function scanCompactPage(options = {}) {
     const maxElements = clampCompactNumber(options.maxElements, 80, 1, 200);
     const maxTextBlocks = clampCompactNumber(options.maxTextBlocks, 20, 0, 80);
@@ -880,6 +972,7 @@
     const elementResult = collectCssMatches(COMPACT_ELEMENT_SELECTOR, document, {
       includeHidden: false,
       limit: maxElements,
+      rank: createCompactElementRanker(),
     });
     const formResult = collectCssMatches(COMPACT_FORM_SELECTOR, document, {
       includeHidden: false,
@@ -993,6 +1086,10 @@
       Math.min(Number(options.limit) || MAX_QUERY_RESULTS, MAX_QUERY_RESULTS),
     );
     const elements = [];
+    // Only compact scans opt into ranking. Collect within the existing node cap
+    // before truncating, otherwise an early sidebar can consume every result.
+    const rank = typeof options.rank === 'function' ? options.rank : null;
+    const ranked = [];
     let totalMatches = 0;
     let truncated = false;
     const visited = new Set();
@@ -1006,9 +1103,13 @@
 
       try {
         if (node.matches(selector) && (includeHidden || isVisible(node))) {
-          totalMatches++;
-          if (elements.length < limit) elements.push(node);
-          else truncated = true;
+          const priority = rank ? rank(node) : 0;
+          if (priority !== null) {
+            totalMatches++;
+            if (rank) ranked.push({ node, priority, order: totalMatches });
+            else if (elements.length < limit) elements.push(node);
+            if (totalMatches > limit) truncated = true;
+          }
         }
       } catch (e) {
         return {
@@ -1027,6 +1128,10 @@
       }
     }
 
+    if (rank) {
+      ranked.sort((a, b) => a.priority - b.priority || a.order - b.order);
+      elements.push(...ranked.slice(0, limit).map((entry) => entry.node));
+    }
     return { elements, totalMatches, truncated };
   }
 

@@ -2734,8 +2734,10 @@ if (window.__WEB_FETCHER_HELPER_INITIALIZED__) {
             throw new Error(`No element found matching selector: ${request.selector}`);
           }
         } else {
-          // Otherwise use Readability to extract the main content
-          const documentClone = document.cloneNode(true);
+          // Use live styles to exclude hidden panels and auxiliary floating UI
+          // before Readability scores the detached document.
+          const documentClone = createExtractionDocument();
+          const fallbackText = documentClone.body?.innerText || '';
 
           const reader = new Readability(documentClone);
           const article = reader.parse();
@@ -2770,8 +2772,8 @@ if (window.__WEB_FETCHER_HELPER_INITIALIZED__) {
               metadata: metadata,
             });
           } else {
-            // Fallback to basic extraction
-            const textContent = document.body.innerText;
+            // Readability mutates its input; use the pre-parse filtered text.
+            const textContent = cleanContent(fallbackText);
             sendResponse({
               success: true,
               textContent: textContent,
@@ -2794,6 +2796,70 @@ if (window.__WEB_FETCHER_HELPER_INITIALIZED__) {
 
     return true; // Async response
   });
+
+  /**
+   * Readability cannot resolve stylesheet rules on a detached clone. Inspect the
+   * live tree, but only prune its clone so extraction never changes the page.
+   */
+  function createExtractionDocument() {
+    const clone = document.cloneNode(true);
+    if (!document.body || !clone.body) return clone;
+
+    const elements = document.body.querySelectorAll('*');
+    const copies = clone.body.querySelectorAll('*');
+    const floating = [];
+    for (let i = 0; i < elements.length; i++) {
+      const element = elements[i];
+      const copy = copies[i];
+      if (!clone.body.contains(copy)) continue;
+      // A detached clone's innerText can include these non-rendered nodes.
+      if (element.matches('script, style, noscript, template')) {
+        copy.remove();
+        continue;
+      }
+
+      let style;
+      try {
+        style = window.getComputedStyle(element);
+      } catch (_) {
+        // Preserve content when the browser cannot supply its computed style.
+        continue;
+      }
+      if (
+        element.hasAttribute('hidden') ||
+        element.getAttribute('aria-hidden') === 'true' ||
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        style.visibility === 'collapse' ||
+        style.contentVisibility === 'hidden' ||
+        parseFloat(style.opacity) === 0
+      ) {
+        copy.remove();
+      } else if (style.position === 'fixed') {
+        floating.push(copy);
+      }
+    }
+
+    // Position alone does not make something auxiliary: readers and entire SPA
+    // layouts can be fixed. Require independent substantive content, and keep
+    // every fixed subtree that contains or belongs to a content landmark.
+    const substantive = (element) => element.textContent.trim().length >= config.minTextLength;
+    const articles = Array.from(clone.body.querySelectorAll('article, [role="article"]')).filter(
+      substantive,
+    );
+    const contentRoots = articles.length
+      ? articles
+      : Array.from(clone.body.querySelectorAll('main, [role="main"]')).filter(substantive);
+    for (const element of floating) {
+      if (
+        contentRoots.length &&
+        !contentRoots.some((root) => root.contains(element) || element.contains(root))
+      ) {
+        element.remove();
+      }
+    }
+    return clone;
+  }
 
   /**
    * Extract metadata from the page

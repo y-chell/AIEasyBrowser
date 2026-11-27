@@ -241,6 +241,88 @@ describe('named CLI browser workflows', () => {
     });
   });
 
+  test.each([
+    {
+      attrs: {
+        'aria-expanded': 'true',
+        'aria-selected': 'false',
+        'aria-checked': 'mixed',
+        required: true,
+        readOnly: true,
+      },
+      states: { expanded: true, selected: false, checked: 'mixed', required: true, readOnly: true },
+    },
+    {
+      attrs: {
+        'aria-expanded': 'false',
+        'aria-selected': 'true',
+        'aria-checked': 'false',
+        required: false,
+        readOnly: false,
+      },
+      states: { expanded: false, selected: true, checked: false, required: false, readOnly: false },
+    },
+    { attrs: { 'aria-checked': 'true' }, states: { checked: true } },
+    { attrs: { checked: false, 'aria-checked': 'true' }, states: { checked: false } },
+    {
+      attrs: {
+        'aria-expanded': 'invalid',
+        'aria-selected': 'mixed',
+        'aria-checked': 'invalid',
+        required: 'false',
+        readOnly: 'true',
+      },
+      states: {},
+    },
+  ])(
+    'retains observable form states without echoing field values: $attrs',
+    async ({ attrs, states }) => {
+      await run({ command: 'use', tabId: 7 });
+      const fixture = scanFixture();
+      fixture.frames[0].elements[0].attrs = {
+        ...attrs,
+        id: 'search',
+        placeholder: 'Find',
+        hasValue: true,
+        value: 'private-field-content',
+      } as any;
+      send.mockResolvedValueOnce(success(fixture));
+      const scanned = await run({ command: 'scan' });
+      expect(scanned.ok).toBe(true);
+      expect((scanned.result as any).elements[0]).toEqual({
+        ref: expect.any(String),
+        frameId: 0,
+        kind: 'input:text',
+        role: 'textbox',
+        text: 'Search',
+        id: 'search',
+        placeholder: 'Find',
+        hasValue: true,
+        ...states,
+      });
+      expect(JSON.stringify(scanned)).not.toContain('private-field-content');
+    },
+  );
+
+  test('keeps a combobox display text separate from its accessible label', async () => {
+    await run({ command: 'use', tabId: 7 });
+    const fixture = scanFixture();
+    Object.assign(fixture.frames[0].elements[0], {
+      kind: 'button',
+      role: 'combobox',
+      text: 'TXT',
+      label: 'Record type',
+      attrs: { 'aria-label': 'Fallback label', 'aria-expanded': 'false' },
+    });
+    send.mockResolvedValueOnce(success(fixture));
+    const scanned = await run({ command: 'scan' });
+    expect((scanned.result as any).elements[0]).toMatchObject({
+      text: 'TXT',
+      label: 'Record type',
+      expanded: false,
+    });
+  });
+
   test('runs fill, explicit assertion and new scan in order, with a fresh handle', async () => {
     const ref = await selectedScan();
     send.mockClear();

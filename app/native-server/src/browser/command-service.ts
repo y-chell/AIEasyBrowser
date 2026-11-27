@@ -433,11 +433,30 @@ export class BrowserCommandService {
           text: typeof element.text === 'string' ? element.text.slice(0, 160) : '',
           ...(element.enabled === false ? { disabled: true } : {}),
           ...(element.visible === false ? { hidden: true } : {}),
-          ...(attrs['aria-label'] ? { label: attrs['aria-label'] } : {}),
+          ...(typeof element.label === 'string' && element.label
+            ? { label: element.label.slice(0, 160) }
+            : attrs['aria-label']
+              ? { label: attrs['aria-label'] }
+              : {}),
           ...(attrs.placeholder ? { placeholder: attrs.placeholder } : {}),
           ...(attrs.id ? { id: attrs.id } : {}),
           ...(attrs.href ? { href: attrs.href } : {}),
-          ...(typeof attrs.checked === 'boolean' ? { checked: attrs.checked } : {}),
+          ...(typeof attrs.checked === 'boolean'
+            ? { checked: attrs.checked }
+            : ['true', 'false', 'mixed'].includes(attrs['aria-checked'])
+              ? {
+                  checked:
+                    attrs['aria-checked'] === 'mixed' ? 'mixed' : attrs['aria-checked'] === 'true',
+                }
+              : {}),
+          ...(['true', 'false'].includes(attrs['aria-expanded'])
+            ? { expanded: attrs['aria-expanded'] === 'true' }
+            : {}),
+          ...(['true', 'false'].includes(attrs['aria-selected'])
+            ? { selected: attrs['aria-selected'] === 'true' }
+            : {}),
+          ...(typeof attrs.required === 'boolean' ? { required: attrs.required } : {}),
+          ...(typeof attrs.readOnly === 'boolean' ? { readOnly: attrs.readOnly } : {}),
           ...(typeof attrs.hasValue === 'boolean' ? { hasValue: attrs.hasValue } : {}),
           ...(attrs.autofill?.protected ? { protected: true } : {}),
         });
