@@ -12,6 +12,38 @@ import {
 import { screenshotContextManager } from '@/utils/screenshot-context';
 import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { waitForDownload } from './download';
+import { readPageVisibility, PAGE_HIDDEN_GUIDANCE } from '@/utils/page-visibility';
+
+function boundedScreenshotStep<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(signal?.reason || new Error('Screenshot cancelled'));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error('SCREENSHOT_TIMEOUT: Chrome did not produce screenshot data within 15000ms'),
+      );
+    }, 15000);
+    signal?.addEventListener('abort', abort, { once: true });
+    pending.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+    if (signal?.aborted) abort();
+  });
+}
 
 // Screenshot-specific constants
 const SCREENSHOT_CONSTANTS = {
@@ -152,14 +184,22 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
   private async captureWithCdp(
     tabId: number,
     args: ScreenshotToolParams,
+    signal?: AbortSignal,
   ): Promise<CdpScreenshotResult> {
+    signal?.throwIfAborted();
     const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
 
     return await cdpSessionManager.withSession(tabId, 'screenshot', async () => {
-      const metrics: any = await cdpSessionManager.sendCommand(tabId, 'Page.getLayoutMetrics', {});
-      const layoutViewport = metrics?.layoutViewport || {};
-      const visualViewport = metrics?.visualViewport || {};
-      const contentSize = metrics?.contentSize || {};
+      // Reject inside the owner callback so withSession's finally releases it.
+      // Bounding the outer withSession promise would leave a pending CDP owner.
+      const send = (method: string, params: object) => {
+        signal?.throwIfAborted();
+        return boundedScreenshotStep(cdpSessionManager.sendCommand(tabId, method, params), signal);
+      };
+      const metrics: any = await send('Page.getLayoutMetrics', {});
+      const layoutViewport = metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
+      const visualViewport = metrics?.cssVisualViewport || metrics?.visualViewport || {};
+      const contentSize = metrics?.cssContentSize || metrics?.contentSize || {};
       const viewportWidth = Math.max(
         1,
         Math.round(layoutViewport.clientWidth || visualViewport.clientWidth || 800),
@@ -178,7 +218,50 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       let heightCss = viewportHeight;
       let truncated = false;
 
-      if (args.fullPage === true) {
+      if (args.selector) {
+        // Capture the selected tab's rendered pixels directly. captureVisibleTab
+        // would crop whichever tab is active, and cannot capture a tall element.
+        const geometry: any = await send('Runtime.evaluate', {
+          expression: `(() => {
+            const matches = document.querySelectorAll(${JSON.stringify(args.selector)});
+            if (matches.length !== 1) throw new Error('Screenshot selector must match exactly one element; found ' + matches.length);
+            const element = matches[0];
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) throw new Error('Screenshot element has no rendered area');
+            for (let node = element; node; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')
+                throw new Error('Screenshot element is hidden');
+            }
+            return {x: rect.left + scrollX, y: rect.top + scrollY, width: rect.width, height: rect.height};
+          })()`,
+          returnByValue: true,
+        });
+        if (geometry?.exceptionDetails)
+          throw new Error(
+            geometry.exceptionDetails.exception?.description ||
+              geometry.exceptionDetails.text ||
+              'Cannot locate screenshot element',
+          );
+        const rect = geometry?.result?.value;
+        if (
+          !rect ||
+          !['x', 'y', 'width', 'height'].every((key) => Number.isFinite(rect[key])) ||
+          rect.width <= 0 ||
+          rect.height <= 0
+        )
+          throw new Error('Screenshot element returned invalid geometry');
+        const x = Math.max(0, rect.x);
+        const y = Math.max(0, rect.y);
+        widthCss = Math.min(rect.x + rect.width, totalWidth) - x;
+        heightCss = Math.min(rect.y + rect.height, totalHeight) - y;
+        if (widthCss <= 0 || heightCss <= 0)
+          throw new Error('Screenshot element is outside the document');
+        truncated = heightCss > SCREENSHOT_CONSTANTS.MAX_CAPTURE_HEIGHT_PX;
+        heightCss = Math.min(heightCss, SCREENSHOT_CONSTANTS.MAX_CAPTURE_HEIGHT_PX);
+        captureParams.captureBeyondViewport = true;
+        captureParams.clip = { x, y, width: widthCss, height: heightCss, scale: 1 };
+      } else if (args.fullPage === true) {
         widthCss = totalWidth;
         heightCss = Math.min(totalHeight, SCREENSHOT_CONSTANTS.MAX_CAPTURE_HEIGHT_PX);
         truncated = totalHeight > heightCss;
@@ -192,11 +275,12 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         };
       }
 
-      const shot: any = await cdpSessionManager.sendCommand(
-        tabId,
-        'Page.captureScreenshot',
-        captureParams,
-      );
+      const shot: any = await send('Page.captureScreenshot', captureParams).catch((error) => {
+        if (signal?.aborted) throw error;
+        throw new Error(
+          `CDP Page.captureScreenshot failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
       const base64Data = typeof shot?.data === 'string' ? shot.data : '';
       if (!base64Data) {
         throw new Error('CDP Page.captureScreenshot returned empty data');
@@ -260,21 +344,17 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     try {
       const background = args.background === true;
       const canUseCdpCapture =
-        background && !selector && (!fullPage || (!args.width && !args.height && !args.maxHeight));
+        (background || Boolean(selector)) && !args.width && !args.height && !args.maxHeight;
 
       // === Path 1: CDP capture (no content script, works on background tabs) ===
       if (canUseCdpCapture) {
-        try {
-          const cdpCapture = await this.captureWithCdp(tab.id!, args);
-          finalImageDataUrl = cdpCapture.dataUrl;
-          finalImageWidthCss = cdpCapture.widthCss;
-          finalImageHeightCss = cdpCapture.heightCss;
-          pageDetails = cdpCapture.pageDetails;
-          results.captureEngine = 'cdp';
-          if (cdpCapture.truncated) results.truncated = true;
-        } catch (e) {
-          console.warn('CDP screenshot capture failed, falling back to helper path:', e);
-        }
+        const cdpCapture = await this.captureWithCdp(tab.id!, args, executionContext?.signal);
+        finalImageDataUrl = cdpCapture.dataUrl;
+        finalImageWidthCss = cdpCapture.widthCss;
+        finalImageHeightCss = cdpCapture.heightCss;
+        pageDetails = cdpCapture.pageDetails;
+        results.captureEngine = 'cdp';
+        if (cdpCapture.truncated) results.truncated = true;
       }
 
       // === Path 2: Helper-assisted capture (requires content script) ===
@@ -439,9 +519,30 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       }
     } catch (error) {
       console.error('Error during screenshot execution:', error);
-      return createErrorResponse(
-        `Screenshot error: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      const captureFailure =
+        /^(?:SCREENSHOT_TIMEOUT:|CDP Page\.captureScreenshot\b|Failed to capture\b|captureVisibleTab\b)|image readback failed/i.test(
+          message,
+        );
+      // A bad selector or crop is not evidence that Chrome cannot render the page.
+      // Cancellation must also return without starting another browser operation.
+      if (!executionContext?.signal?.aborted && captureFailure) {
+        const pageVisibility = await readPageVisibility(tab.id!);
+        if (pageVisibility.hidden === true) {
+          const detail = `PAGE_HIDDEN: Screenshot error: ${message}. ${PAGE_HIDDEN_GUIDANCE}`;
+          return {
+            ...createErrorResponse(detail),
+            structuredContent: {
+              success: false,
+              code: 'PAGE_HIDDEN',
+              error: detail,
+              pageVisibility,
+              guidance: PAGE_HIDDEN_GUIDANCE,
+            },
+          };
+        }
+      }
+      return createErrorResponse(`Screenshot error: ${message}`);
     } finally {
       // 3. Reset page only if we prepared it
       if (didPreparePage) {

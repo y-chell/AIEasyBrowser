@@ -94,6 +94,14 @@ export const browserCommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('scan'), ...common, ...scanOptions }).strict(),
   z
     .object({
+      command: z.literal('view'),
+      ...common,
+      selector: z.string().min(1).optional(),
+      fullPage: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
       command: z.literal('act'),
       ...common,
       actions: z.array(browserActionSchema).min(1).max(20),
@@ -149,7 +157,7 @@ export interface BrowserCommandResponse {
   ok: boolean;
   session?: string;
   result?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; details?: Record<string, unknown> };
   phase?: string;
   actionStatus?: ActionStatus;
   completed?: number;
@@ -160,6 +168,7 @@ export class BrowserCommandError extends Error {
   constructor(
     public readonly code: string,
     message: string,
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
   }

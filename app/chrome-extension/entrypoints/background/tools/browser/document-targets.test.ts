@@ -210,6 +210,21 @@ describe('trusted click and keyboard input', () => {
 });
 
 describe('strict CLI compact scan', () => {
+  test('preserves page visibility from each frame scan', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValue({
+      success: true,
+      title: 'Fixture',
+      url: 'https://fixture.test/',
+      elements: [],
+      pageVisibility: { visibilityState: 'hidden', hidden: true, hasFocus: true },
+    } as any);
+    const scanned = await scanCompactTool.execute({ tabId: 7 }, { strictTarget: true });
+    expect((scanned.structuredContent as any).frames[0].pageVisibility).toEqual({
+      visibilityState: 'hidden',
+      hidden: true,
+      hasFocus: true,
+    });
+  });
   test('captures each frame document identity and scans exactly that document', async () => {
     const scanned = await scanCompactTool.execute({ tabId: 7 }, { strictTarget: true });
     expect(scanned.isError).toBe(false);

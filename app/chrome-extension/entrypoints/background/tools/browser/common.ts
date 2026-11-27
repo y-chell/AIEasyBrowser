@@ -1,6 +1,8 @@
-import { createErrorResponse, ToolResult } from '@/common/tool-handler';
+import { createErrorResponse, createStructuredToolResult, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
+import type { BrowserToolExecutionContext } from '../browser-session-context';
 import { TOOL_NAMES } from 'aieasybrowser-shared';
+import { focusTabAndVerify } from '@/utils/page-visibility';
 
 // Default window dimensions
 const DEFAULT_WINDOW_WIDTH = 1280;
@@ -124,7 +126,55 @@ export function buildUrlQueryPatterns(input: string): {
 class NavigateTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.NAVIGATE;
 
-  async execute(args: NavigateToolParams): Promise<ToolResult> {
+  private createNavigationResponse(
+    tab: chrome.tabs.Tab,
+    navigationAction: 'navigate' | 'refresh' | 'back' | 'forward' | 'reuse',
+    requestedUrl: string | null,
+    message: string,
+    tabs?: chrome.tabs.Tab[],
+  ): ToolResult {
+    if (typeof tab.id !== 'number') {
+      return createErrorResponse('Navigation returned no tab ID');
+    }
+    return createStructuredToolResult({
+      success: true,
+      message,
+      tabId: tab.id,
+      windowId: tab.windowId,
+      navigationAction,
+      navigationStatus: navigationAction === 'reuse' ? 'not_requested' : 'requested',
+      requestedUrl,
+      // These are Chrome snapshots, not proof that this request committed. Even
+      // a matching URL or status="complete" may still describe the old document.
+      url: tab.url ?? null,
+      pendingUrl: tab.pendingUrl ?? null,
+      tabStatus: tab.status ?? null,
+      ...(tabs ? { tabs: tabs.map((item) => ({ tabId: item.id, url: item.url })) } : {}),
+    });
+  }
+
+  private async createWindowNavigationResponse(
+    window: chrome.windows.Window,
+    requestedUrl: string,
+  ): Promise<ToolResult> {
+    const tabs = window.tabs?.length
+      ? window.tabs
+      : await chrome.tabs.query({ windowId: window.id });
+    const tab = tabs.find((item) => typeof item.id === 'number');
+    if (!tab) return createErrorResponse('Navigation requested, but new window returned no tab ID');
+    return this.createNavigationResponse(
+      tab,
+      'navigate',
+      requestedUrl,
+      'Navigation requested in new window; completion has not been verified',
+      tabs,
+    );
+  }
+
+  async execute(
+    args: NavigateToolParams,
+    executionContext?: BrowserToolExecutionContext,
+  ): Promise<ToolResult> {
     const {
       newWindow = false,
       width,
@@ -142,35 +192,28 @@ class NavigateTool extends BaseBrowserToolExecutor {
     );
 
     try {
+      const explicitTab = await this.tryGetTab(tabId);
+      if (typeof tabId === 'number' && !explicitTab && executionContext?.strictTarget) {
+        return createErrorResponse('TARGET_CLOSED: select an existing tab with use or open');
+      }
+
       // Handle refresh option first
       if (refresh) {
-        console.log('Refreshing current active tab');
-        const explicit = await this.tryGetTab(tabId);
+        console.log('Requesting refresh of target tab');
         // Get target tab (explicit or active in provided window)
-        const targetTab = explicit || (await this.getActiveTabOrThrowInWindow(windowId));
+        const targetTab = explicitTab || (await this.getActiveTabOrThrowInWindow(windowId));
         if (!targetTab.id) return createErrorResponse('No target tab found to refresh');
         await chrome.tabs.reload(targetTab.id);
 
-        console.log(`Refreshed tab ID: ${targetTab.id}`);
+        console.log(`Refresh requested for tab ID: ${targetTab.id}`);
 
-        // Get updated tab information
         const updatedTab = await chrome.tabs.get(targetTab.id);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: 'Successfully refreshed current tab',
-                tabId: updatedTab.id,
-                windowId: updatedTab.windowId,
-                url: updatedTab.url,
-              }),
-            },
-          ],
-          isError: false,
-        };
+        return this.createNavigationResponse(
+          updatedTab,
+          'refresh',
+          null,
+          'Refresh requested; completion has not been verified',
+        );
       }
 
       // Validate that url is provided when not refreshing
@@ -180,7 +223,6 @@ class NavigateTool extends BaseBrowserToolExecutor {
 
       // Handle history navigation: url="back" or url="forward"
       if (url === 'back' || url === 'forward') {
-        const explicitTab = await this.tryGetTab(tabId);
         const targetTab = explicitTab || (await this.getActiveTabOrThrowInWindow(windowId));
         if (!targetTab.id) {
           return createErrorResponse('No target tab found for history navigation');
@@ -194,29 +236,19 @@ class NavigateTool extends BaseBrowserToolExecutor {
 
         if (url === 'forward') {
           await chrome.tabs.goForward(targetTab.id);
-          console.log(`Navigated forward in tab ID: ${targetTab.id}`);
+          console.log(`Forward navigation requested in tab ID: ${targetTab.id}`);
         } else {
           await chrome.tabs.goBack(targetTab.id);
-          console.log(`Navigated back in tab ID: ${targetTab.id}`);
+          console.log(`Back navigation requested in tab ID: ${targetTab.id}`);
         }
 
         const updatedTab = await chrome.tabs.get(targetTab.id);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: `Successfully navigated ${url} in browser history`,
-                tabId: updatedTab.id,
-                windowId: updatedTab.windowId,
-                url: updatedTab.url,
-              }),
-            },
-          ],
-          isError: false,
-        };
+        return this.createNavigationResponse(
+          updatedTab,
+          url,
+          null,
+          `History navigation ${url} requested; completion has not been verified`,
+        );
       }
 
       const normalizedUrl = url.trim();
@@ -303,13 +335,10 @@ class NavigateTool extends BaseBrowserToolExecutor {
         return best.tab;
       };
 
-      const explicitTab = await this.tryGetTab(tabId);
       const existingTab = explicitTab || pickBestMatch(normalizedUrl, candidateTabs);
       if (existingTab?.id !== undefined) {
-        console.log(
-          `URL already open in Tab ID: ${existingTab.id}, Window ID: ${existingTab.windowId}`,
-        );
-        // Update URL only when explicit tab specified and url differs
+        // An explicit target always requests navigation, including the same URL.
+        // Matching an existing tab by URL only reuses it without navigating.
         if (explicitTab && typeof explicitTab.id === 'number') {
           await chrome.tabs.update(explicitTab.id, { url: normalizedUrl });
         }
@@ -319,25 +348,15 @@ class NavigateTool extends BaseBrowserToolExecutor {
           focusWindow: background !== true,
         });
 
-        console.log(`Activated existing Tab ID: ${existingTab.id}`);
-        // Get updated tab information and return it
         const updatedTab = await chrome.tabs.get(existingTab.id);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: 'Activated existing tab',
-                tabId: updatedTab.id,
-                windowId: updatedTab.windowId,
-                url: updatedTab.url,
-              }),
-            },
-          ],
-          isError: false,
-        };
+        return this.createNavigationResponse(
+          updatedTab,
+          explicitTab ? 'navigate' : 'reuse',
+          normalizedUrl,
+          explicitTab
+            ? 'Navigation requested in existing tab; completion has not been verified'
+            : 'Reused existing tab; no navigation requested',
+        );
       }
 
       // 2. If URL is not already open, decide how to open it based on options
@@ -355,27 +374,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
         });
 
         if (newWindow && newWindow.id !== undefined) {
-          console.log(`URL opened in new Window ID: ${newWindow.id}`);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  message: 'Opened URL in new window',
-                  windowId: newWindow.id,
-                  tabs: newWindow.tabs
-                    ? newWindow.tabs.map((tab) => ({
-                        tabId: tab.id,
-                        url: tab.url,
-                      }))
-                    : [],
-                }),
-              },
-            ],
-            isError: false,
-          };
+          return await this.createWindowNavigationResponse(newWindow, normalizedUrl);
         }
       } else {
         console.log('Opening URL in the last active window.');
@@ -400,25 +399,12 @@ class NavigateTool extends BaseBrowserToolExecutor {
             await chrome.windows.update(targetWindow.id, { focused: true });
           }
 
-          console.log(
-            `URL opened in new Tab ID: ${newTab.id} in existing Window ID: ${targetWindow.id}`,
+          return this.createNavigationResponse(
+            newTab,
+            'navigate',
+            normalizedUrl,
+            'Navigation requested in new tab; completion has not been verified',
           );
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  message: 'Opened URL in new tab in existing window',
-                  tabId: newTab.id,
-                  windowId: targetWindow.id,
-                  url: newTab.url,
-                }),
-              },
-            ],
-            isError: false,
-          };
         } else {
           // In rare cases, if there's no recently active window (e.g., browser just started with no windows)
           // Fall back to opening in a new window
@@ -432,27 +418,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
           });
 
           if (fallbackWindow && fallbackWindow.id !== undefined) {
-            console.log(`URL opened in fallback new Window ID: ${fallbackWindow.id}`);
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    success: true,
-                    message: 'Opened URL in new window',
-                    windowId: fallbackWindow.id,
-                    tabs: fallbackWindow.tabs
-                      ? fallbackWindow.tabs.map((tab) => ({
-                          tabId: tab.id,
-                          url: tab.url,
-                        }))
-                      : [],
-                  }),
-                },
-              ],
-              isError: false,
-            };
+            return await this.createWindowNavigationResponse(fallbackWindow, normalizedUrl);
           }
         }
       }
@@ -732,11 +698,10 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
     console.log(`Attempting to switch to tab ID: ${tabId} in window ID: ${windowId}`);
 
     try {
-      if (windowId !== undefined) {
-        await chrome.windows.update(windowId, { focused: true });
-      }
-      await chrome.tabs.update(tabId, { active: true });
-
+      const targetTab = await chrome.tabs.get(tabId);
+      if (windowId !== undefined && windowId !== targetTab.windowId)
+        throw new Error('The requested tab does not belong to windowId');
+      const focusVerification = await focusTabAndVerify(targetTab);
       const updatedTab = await chrome.tabs.get(tabId);
 
       return {
@@ -745,10 +710,14 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
             type: 'text',
             text: JSON.stringify({
               success: true,
-              message: `Successfully switched to tab ID: ${tabId}`,
+              message: focusVerification.renderingReady
+                ? `Tab ${tabId} is active and its document reports visible focus`
+                : `Tab ${tabId} activation requested; page presentation is not confirmed`,
               tabId: updatedTab.id,
               windowId: updatedTab.windowId,
               url: updatedTab.url,
+              active: updatedTab.active,
+              focusVerification,
             }),
           },
         ],

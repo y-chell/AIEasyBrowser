@@ -166,6 +166,18 @@ Replace the tab ID and ref with the values the previous step returned. `--sessio
 
 In daily use the agent issues these commands following the rules in the Skill: how to choose targets, when references expire, and when a failure may be retried. You describe the task and check the result.
 
+### Seeing images on a page
+
+`scan` and content extraction return DOM text. To inspect pictures, diagrams, or image-rich posts, capture the rendered page directly:
+
+```sh
+aieasybrowser --session research view
+aieasybrowser --session research view --selector '#post_1 .cooked'
+aieasybrowser --session research view --full
+```
+
+`view` returns a temporary screenshot `imagePath` for the host's image reader, without downloading individual source images. The default captures the selected tab's viewport; `--selector` captures exactly one image or region; `--full` produces a bounded full-page overview. Scroll first to load lazy images, and use a region capture when small text needs more detail. CLI stdout is JSON, so visual understanding still requires a vision-capable model and a host image reader. Remove temporary screenshots after inspection unless they need to be kept.
+
 ## Known limitations
 
 - No JavaScript coverage or heap snapshot: Chrome does not give extensions the Profiler or HeapProfiler domains. CSS coverage, CPU profiles, and per-constructor instance counts work.

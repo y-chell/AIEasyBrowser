@@ -323,6 +323,101 @@ describe('named CLI browser workflows', () => {
     });
   });
 
+  test('view uses the selected tab and avoids downloads, focus changes, and stale refs', async () => {
+    const ref = await selectedScan();
+    send.mockClear();
+    const result = await run({ command: 'view', selector: '#post-image' });
+    expect(result.ok).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({
+      name: 'chrome_screenshot',
+      args: {
+        tabId: 7,
+        selector: '#post-image',
+        background: true,
+        storeBase64: true,
+        savePng: false,
+        fullPage: false,
+      },
+    });
+    expect(await run({ command: 'act', actions: [{ op: 'click', ref }] })).toMatchObject({
+      error: { code: 'STALE_REF' },
+      actionStatus: 'not_started',
+    });
+  });
+
+  test('view rejects ambiguous capture modes before browser IO', async () => {
+    expect(await run({ command: 'view', selector: 'img', fullPage: true })).toMatchObject({
+      error: { code: 'INVALID_ARGUMENT' },
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test('retains hidden-page diagnostics after completed actions without replaying', async () => {
+    const ref = await selectedScan();
+    send.mockClear();
+    send.mockResolvedValueOnce(success({ success: true })).mockResolvedValueOnce(
+      success({
+        success: false,
+        error: 'PAGE_HIDDEN: condition timed out',
+        code: 'PAGE_HIDDEN',
+        pageVisibility: { visibilityState: 'hidden', hidden: true, hasFocus: true },
+        elementState: { exists: true, visible: false },
+        guidance: 'Show the Chrome window; do not repeat the action.',
+      }),
+    );
+    const failed = await run({
+      command: 'act',
+      actions: [{ op: 'click', ref }],
+      expect: { kind: 'element', selector: '#dialog' },
+      timeoutMs: 5000,
+    });
+    expect(failed).toMatchObject({
+      ok: false,
+      phase: 'expect',
+      completed: 1,
+      actionStatus: 'completed',
+      error: {
+        code: 'PAGE_HIDDEN',
+        details: {
+          pageVisibility: { hidden: true },
+          elementState: { exists: true, visible: false },
+        },
+      },
+    });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1][0].args.timeoutMs).toBeLessThanOrEqual(4750);
+  });
+
+  test('exposes scan visibility and verified focus instead of stale active state', async () => {
+    await run({ command: 'use', tabId: 7 });
+    const fixture = scanFixture();
+    Object.assign(fixture.frames[0], {
+      pageVisibility: { visibilityState: 'hidden', hidden: true, hasFocus: false },
+    });
+    send.mockResolvedValueOnce(success(fixture));
+    expect((await run({ command: 'scan' })).result).toMatchObject({
+      frames: [{ pageVisibility: { hidden: true } }],
+    });
+    send.mockImplementation(async (payload) =>
+      payload.name === 'chrome_switch_tab'
+        ? success({
+            success: true,
+            active: true,
+            focusVerification: {
+              renderingReady: false,
+              code: 'PAGE_HIDDEN',
+              pageVisibility: { hidden: true },
+            },
+          })
+        : defaultReply(payload),
+    );
+    expect((await run({ command: 'use', tabId: 8, focus: true })).result).toMatchObject({
+      active: true,
+      focusVerification: { renderingReady: false, code: 'PAGE_HIDDEN' },
+    });
+  });
+
   test('runs fill, explicit assertion and new scan in order, with a fresh handle', async () => {
     const ref = await selectedScan();
     send.mockClear();

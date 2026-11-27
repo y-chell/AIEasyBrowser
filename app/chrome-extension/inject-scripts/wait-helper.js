@@ -11,18 +11,86 @@
   if (!window.__claudeElementMap) window.__claudeElementMap = {};
   if (!window.__claudeRefCounter) window.__claudeRefCounter = 0;
 
-  function isVisible(el) {
+  function composedParent(el) {
+    return el.assignedSlot || el.parentElement || el.getRootNode?.()?.host || null;
+  }
+
+  function elementState(el) {
+    if (!(el instanceof Element) || !el.isConnected) return { exists: false, visible: false };
     try {
-      if (!(el instanceof Element)) return false;
-      const style = getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')
-        return false;
+      // Opacity and aria-hidden on a parent do not appear in a child's computed style.
+      // Follow slots/shadow hosts as well as light-DOM parents.
+      for (let node = el; node instanceof Element; node = composedParent(node)) {
+        const style = getComputedStyle(node);
+        let hiddenReason;
+        if (node.hidden) hiddenReason = 'hidden';
+        else if (node.getAttribute('aria-hidden') === 'true') hiddenReason = 'aria-hidden';
+        else if (node.inert) hiddenReason = 'inert';
+        else if (style.display === 'none') hiddenReason = 'display:none';
+        else if (style.visibility === 'hidden' || style.visibility === 'collapse')
+          hiddenReason = `visibility:${style.visibility}`;
+        else if (Number.parseFloat(style.opacity) <= 0) hiddenReason = 'opacity:0';
+        else if (style.contentVisibility === 'hidden') hiddenReason = 'content-visibility:hidden';
+        if (hiddenReason) {
+          return {
+            exists: true,
+            visible: false,
+            hiddenReason: `${node === el ? 'self' : 'ancestor'}:${hiddenReason}`,
+          };
+        }
+      }
       const rect = el.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return false;
-      return true;
+      if (rect.width <= 0 || rect.height <= 0)
+        return { exists: true, visible: false, hiddenReason: 'empty-bounds' };
+      return { exists: true, visible: true };
     } catch {
-      return false;
+      return { exists: true, visible: false, hiddenReason: 'unavailable' };
     }
+  }
+
+  function isVisible(el) {
+    return elementState(el).visible;
+  }
+
+  function pageVisibility() {
+    return {
+      visibilityState: document.visibilityState,
+      hidden: document.hidden,
+      hasFocus: document.hasFocus(),
+    };
+  }
+
+  function withDiagnostics(result, el) {
+    const visibility = pageVisibility();
+    const diagnostics = { pageVisibility: visibility };
+    if (el !== undefined) diagnostics.elementState = elementState(el);
+    // Conditions are evaluated first. A hidden page does not invalidate a successful wait.
+    if (!result.success && result.reason === 'timeout' && visibility.hidden) {
+      diagnostics.code = 'PAGE_HIDDEN';
+      diagnostics.guidance =
+        'The page is hidden; rendering and animations may be paused. Restore/show the actual Chrome window and tab, then re-check the condition. Focus requests do not guarantee OS presentation. Do not repeat an already completed action.';
+    }
+    return { ...result, ...diagnostics };
+  }
+
+  let textCache = new WeakMap();
+  let textNodesRemaining = 12000;
+  function visibleText(node) {
+    // innerText/textContent on a visible container can include opacity:0 / aria-hidden children.
+    // Cache per check so scanning parents and children does not repeatedly traverse each subtree.
+    if (textCache.has(node)) return textCache.get(node);
+    if (textNodesRemaining-- <= 0) return '';
+    let text = '';
+    if (node.nodeType === 3) text = node.textContent || '';
+    else if (node instanceof Element && isVisible(node)) {
+      for (const child of node.childNodes || []) {
+        if (textNodesRemaining <= 0) break;
+        text += visibleText(child);
+      }
+      text += ' ';
+    }
+    textCache.set(node, text);
+    return text;
   }
 
   function normalize(str) {
@@ -140,13 +208,15 @@
         const value = el.value || el.getAttribute('value');
         if (value && normalize(value).includes(t)) return true;
       }
-      const text = el.innerText || el.textContent || '';
+      const text = visibleText(el);
       if (normalize(text).includes(t)) return true;
     } catch {}
     return false;
   }
 
   function findElementByText(text) {
+    textCache = new WeakMap();
+    textNodesRemaining = 12000;
     // Fast path: query common interactive elements first
     const prioritized = querySelectorAllDeep('a,button,input,textarea,select,label,summary,[role]');
     for (const el of prioritized) if (matchesText(el, text)) return el;
@@ -307,22 +377,23 @@
         resolved = true;
         if (stopWatching) stopWatching();
         clearTimeout(timer);
-        resolve(result);
+        resolve(withDiagnostics(result));
       };
 
       // Initial check
       stopWatching = watchForChanges(check);
       check();
-      timer = setTimeout(
-        () => {
-          done({ success: false, reason: 'timeout', tookMs: Date.now() - start });
-        },
-        Math.max(0, timeout),
-      );
+      if (!resolved)
+        timer = setTimeout(
+          () => {
+            done({ success: false, reason: 'timeout', tookMs: Date.now() - start });
+          },
+          Math.max(0, timeout),
+        );
     });
   }
 
-  function waitForSelector({ selector, visible = true, timeout = 5000, isXPath = false }) {
+  function waitForSelector({ selector, ref, visible = true, timeout = 5000, isXPath = false }) {
     return new Promise((resolve) => {
       const start = Date.now();
       let resolved = false;
@@ -330,16 +401,20 @@
       let timer = null;
 
       const isMatch = () => {
+        if (ref) {
+          const el = resolveRef(ref);
+          return visible ? (isVisible(el) ? el : null) : isVisible(el) ? null : 'hidden';
+        }
         if (visible) return queryVisibleElement(selector, isXPath);
         return hasVisibleElement(selector, isXPath) ? null : 'hidden';
       };
 
-      const done = (result) => {
+      const done = (result, el = ref ? resolveRef(ref) : queryElement(selector, isXPath)) => {
         if (resolved) return;
         resolved = true;
         if (stopWatching) stopWatching();
         clearTimeout(timer);
-        resolve(result);
+        resolve(withDiagnostics(result, el));
       };
 
       const check = () => {
@@ -351,17 +426,18 @@
         if (el) {
           const ref = ensureRefForElement(el);
           const center = centerOf(el);
-          done({ success: true, matched: { ref, center }, tookMs: Date.now() - start });
+          done({ success: true, matched: { ref, center }, tookMs: Date.now() - start }, el);
         }
       };
 
       // initial check
       stopWatching = watchForChanges(check);
       check();
-      timer = setTimeout(
-        () => done({ success: false, reason: 'timeout', tookMs: Date.now() - start }),
-        Math.max(0, timeout),
-      );
+      if (!resolved)
+        timer = setTimeout(
+          () => done({ success: false, reason: 'timeout', tookMs: Date.now() - start }),
+          Math.max(0, timeout),
+        );
     });
   }
 
@@ -377,12 +453,12 @@
         return queryClickableElement(selector, isXPath);
       };
 
-      const done = (result) => {
+      const done = (result, el = ref ? resolveRef(ref) : queryElement(selector, isXPath)) => {
         if (resolved) return;
         resolved = true;
         if (stopWatching) stopWatching();
         clearTimeout(timer);
-        resolve(result);
+        resolve(withDiagnostics(result, el));
       };
 
       const check = () => {
@@ -395,10 +471,11 @@
 
       stopWatching = watchForChanges(check);
       check();
-      timer = setTimeout(
-        () => done({ success: false, reason: 'timeout', tookMs: Date.now() - start }),
-        Math.max(0, timeout),
-      );
+      if (!resolved)
+        timer = setTimeout(
+          () => done({ success: false, reason: 'timeout', tookMs: Date.now() - start }),
+          Math.max(0, timeout),
+        );
     });
   }
 
@@ -411,7 +488,7 @@
       if (request && request.action === 'waitForText') {
         const text = String(request.text || '').trim();
         const appear = request.appear !== false; // default true
-        const timeout = Number(request.timeout || 5000);
+        const timeout = Number(request.timeout ?? 5000);
         if (!text) {
           sendResponse({ success: false, error: 'text is required' });
           return true;
@@ -421,20 +498,23 @@
       }
       if (request && request.action === 'waitForSelector') {
         const selector = String(request.selector || '').trim();
+        const ref = String(request.ref || '').trim();
         const visible = request.visible !== false; // default true
-        const timeout = Number(request.timeout || 5000);
+        const timeout = Number(request.timeout ?? 5000);
         const isXPath = request.isXPath === true;
-        if (!selector) {
-          sendResponse({ success: false, error: 'selector is required' });
+        if (!selector && !ref) {
+          sendResponse({ success: false, error: 'selector or ref is required' });
           return true;
         }
-        waitForSelector({ selector, visible, timeout, isXPath }).then((res) => sendResponse(res));
+        waitForSelector({ selector, ref, visible, timeout, isXPath }).then((res) =>
+          sendResponse(res),
+        );
         return true; // async
       }
       if (request && request.action === 'waitForClickable') {
         const selector = String(request.selector || '').trim();
         const ref = String(request.ref || '').trim();
-        const timeout = Number(request.timeout || 5000);
+        const timeout = Number(request.timeout ?? 5000);
         const isXPath = request.isXPath === true;
         if (!selector && !ref) {
           sendResponse({ success: false, error: 'selector or ref is required' });

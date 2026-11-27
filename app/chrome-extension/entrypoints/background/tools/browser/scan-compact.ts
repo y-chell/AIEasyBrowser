@@ -33,6 +33,7 @@ interface ScanCompactResponse {
   title?: string;
   url?: string;
   readyState?: string;
+  pageVisibility?: Record<string, unknown>;
   viewport?: Record<string, unknown>;
   counts?: Record<string, number>;
   elements?: unknown[];
@@ -195,6 +196,7 @@ class ScanCompactTool extends BaseBrowserToolExecutor {
             title: response.title || '',
             url: response.url || frame.url || '',
             readyState: response.readyState || 'unknown',
+            pageVisibility: response.pageVisibility || null,
             viewport: response.viewport || null,
             counts: response.counts || {},
             elements: response.elements || [],

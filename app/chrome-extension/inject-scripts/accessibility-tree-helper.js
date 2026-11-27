@@ -1023,6 +1023,11 @@
       title: document.title || '',
       url: location.href,
       readyState: document.readyState || 'unknown',
+      pageVisibility: {
+        visibilityState: document.visibilityState || 'unknown',
+        hidden: typeof document.hidden === 'boolean' ? document.hidden : null,
+        hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null,
+      },
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,

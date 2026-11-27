@@ -21,12 +21,12 @@ aieasybrowser --session research click <ref> --expect '{"kind":"text","text":"Re
 aieasybrowser --session research press Enter --expect '{"kind":"url","value":"/results"}'
 ```
 
-- Use the tab ID a command returned, not a remembered one or whichever tab is active. `use` does not steal focus; `use --focus` does. `open <url>` opens or reuses a URL, `open <url> --current` navigates the selected tab. Opening a URL does not mean navigation has committed or the site is ready; the immediate result can still contain the old URL. Wait for the target URL or page-specific condition before scanning and acting.
+- Use the tab ID a command returned, not a remembered one or whichever tab is active. `use` does not steal focus; `use --focus` does. `open <url>` opens or reuses a URL, `open <url> --current` navigates the selected tab. The result separates `navigationAction`, `navigationStatus`, `requestedUrl`, observed `url`, `pendingUrl`, and `tabStatus`. `navigationStatus:"requested"` means the request was sent, even when `url` is still old or `tabStatus` is `complete`; `not_requested` means an existing tab was reused. Neither proves page readiness. Wait for the target URL or page-specific condition before scanning and acting.
 - Scan output has bounded `elements`, `text`, frame IDs, errors, and truncation. Within each frame, on-screen dialog/popover controls come first, then on-screen content, navigation, and offscreen candidates; scroll-container clipping is respected and hidden mirror inputs are excluded. The default budget is 40 elements, 10 text blocks, 20 frame summaries, and 10 frame errors for the whole page, not per iframe; `truncated: true` or non-empty `errors` means you have not seen the full page. Use the returned versioned `ref`. If a target is outside the budget, scan one frame (`scan --frame <id>`), raise the limit, or use a query tool. Controls expose `checked` (including `mixed`), `expanded`, `selected`, `required`, and `readOnly` when available. A button's visible `text` can differ from its accessible `label`. Form values are not echoed; protected fields are marked `protected`.
 - `fill` treats its value as a string; for a checkbox use `fill <ref> false --json-value`. `fill` blurs the field when it finishes. `press` targets the focused element of the scanned top frame (`--frame <id>` for an iframe) and takes no ref, so to submit a field with Enter, click the field again after `fill`.
 - `act '[...]'` runs up to 20 `click`/`fill`/`press` actions in order, checks `--expect`, and returns a fresh scan. Batch fields whose targets stay stable; stop and observe between steps that change the page.
 - Postconditions: `element`, `text`, `url`, `title` (with `value` and `match`: `contains`, `equals`, `regex`), synchronous `javascript` (use the `predicate` string, e.g. `{"kind":"javascript","predicate":"document.title === 'Ready'"}`; MAIN world of the frame; return false for absent objects instead of dereferencing null), and `networkIdle`. Prefer a site-specific condition; a successful click does not prove its effect.
-- If a scan is empty after opening a dialog, inspect its ancestor styles and `document.visibilityState`; its children can exist while the dialog remains at `opacity: 0`. An element-exists check alone does not establish that the dialog is visible. A successful submission can also leave a transparent, exiting dialog in the DOM while the document is hidden; verify the resulting records or success state instead of requiring immediate node removal. `use --focus`/`Page.bringToFront` do not guarantee the OS presents the window.
+- Scans include `frames[].pageVisibility`; `use --focus` restores minimized windows and reports `focusVerification` instead of assuming activation means visible rendering. A wait that times out while the document is hidden returns `PAGE_HIDDEN` with `error.details` explaining page/element state. Already-satisfied conditions still succeed in hidden tabs. For an exiting dialog, use `{"kind":"element","selector":"[role=dialog]","state":"hidden"}` or check the business result; opacity-zero ancestors now count as hidden even when the DOM node remains. `exists` only tests DOM presence. If `focusVerification.renderingReady` remains false, show the actual Chrome window; focus API calls cannot guarantee OS presentation.
 - `wait '<condition-json>'` waits and rescans without acting. `--timeout <ms>` is the overall deadline (default 60000, max 120000). JSON arguments accept `@file` or `@-` for stdin, which avoids shell quoting.
 
 ## Results and failures
@@ -49,7 +49,7 @@ Every command prints one JSON object. Check `ok`, then `phase`, `actionStatus`, 
 | `OUTPUT_EXISTS`                                                                                           | Nothing was written                                                    | Pick a new path or pass `overwrite:true`                                              |
 | `PARSE_FAILED`, `BUNDLE_FORMAT_UNKNOWN`, `SOURCEMAP_NOT_FOUND`, `SOURCEMAP_FETCH_FAILED`, `DECODE_FAILED` | Offline analysis input problem                                         | Check the input; nothing touched the page                                             |
 
-- Only refs from the latest successful scan in this named session work. A new scan, action command, `use`, `open`, `eval`, or `call` expires earlier refs; `--no-scan` hides output but still expires them. Navigation or refresh, even to the same URL, and a same-document DOM replacement also invalidate them.
+- Only refs from the latest successful scan in this named session work. A new scan, action command, `use`, `open`, `view`, `eval`, or `call` expires earlier refs; `--no-scan` hides output but still expires them. Navigation or refresh, even to the same URL, and a same-document DOM replacement also invalidate them.
 - A bridge or extension restart loses bridge-held state and every held CDP session. Select the tab again and scan; nothing is restored automatically.
 
 ## Coordinates and trusted input
@@ -89,6 +89,18 @@ Verify from the hidden field (`[name=cf-turnstile-response]` value is several hu
 Markers: widget — Cloudflare `challenges.cloudflare.com`, hCaptcha `js.hcaptcha.com`, reCAPTCHA `www.google.com/recaptcha`, GeeTest `static.geetest.com`, Tencent `turing.captcha.qcloud.com`, NetEase `cstaticdun.126.net`, Shumei `castatic.fengkongcloud.cn`, Aliyun `cf.aliyun.com`, Dingxiang `cap.dingxiang-inc.com`, Arkose `client-api.arkoselabs.com`, AWS WAF `aws-waf-token`; silent first — Akamai `_abck`, DataDome `datadome`, PerimeterX `_px*`, Imperva `incap_ses`, Kasada `kpsdk`. A marker with no visible widget means type 2: look for the token, not for something to click.
 
 Read the failure before acting (a 403 challenge, a 200 shell without data, and a JSON error are different problems), and never report a check passed because a click returned success.
+
+## Seeing page images
+
+`scan` and text extraction describe the DOM; they do not send image pixels to the model. To inspect a page with pictures, use `view` first instead of downloading every original image:
+
+```sh
+aieasybrowser --session research view
+aieasybrowser --session research view --selector '#post_1 .cooked'
+aieasybrowser --session research view --full
+```
+
+Open the returned `imagePath` with the host's image reader (for example `read_image`). The CLI captures the selected tab's rendered pixels, stores one temporary image outside Downloads, and returns its path rather than a Base64 text dump. It does not click image download links, fetch source-image URLs, or require browser focus. `--selector` must identify exactly one element in the top document; use it to inspect one image or a region containing several images at higher detail. It can capture a tall element beyond the viewport. `--full` gives an overview with a bounded output size; zoom into individual regions when small text is unreadable. Lazy-loaded images must first be rendered by scrolling the page. Screenshot CDP steps have a 15-second deadline and release their debugger owner on timeout or cancellation. A hidden-page capture failure reports `PAGE_HIDDEN`; do not switch silently to an active tab or download originals to hide the failure. Delete the temporary screenshot after inspection unless the user wants to keep it. Seeing images still requires a vision-capable model and a host image reader; plain shell JSON alone is not visual input.
 
 ## Advanced tools
 

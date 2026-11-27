@@ -1,5 +1,7 @@
 import { Command, InvalidArgumentError } from 'commander';
 import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { isIP } from 'node:net';
 import { getBridgeBaseUrl, getBridgeAuthHeaders } from '../constant';
 import { BrowserCommandError, browserFailure, type BrowserCommandResponse } from './protocol';
@@ -10,6 +12,7 @@ export const BROWSER_COMMAND_NAMES = new Set([
   'use',
   'open',
   'scan',
+  'view',
   'act',
   'click',
   'fill',
@@ -183,6 +186,59 @@ export async function requestBrowserCommand(
   }
 }
 
+// CLI stdout is text, not an image attachment channel. Keep screenshot bytes out
+// of the model's text context and hand the host's image reader a temporary file.
+export function materializeView(response: BrowserCommandResponse): BrowserCommandResponse {
+  if (!response.ok) return response;
+  const result = response.result as Record<string, unknown> | undefined;
+  const extensions: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+  };
+  const mimeType = typeof result?.mimeType === 'string' ? result.mimeType : '';
+  const data = result?.base64Data;
+  if (
+    !extensions[mimeType] ||
+    typeof data !== 'string' ||
+    !data.length ||
+    data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(data)
+  ) {
+    return {
+      ...browserFailure('INVALID_RESPONSE', 'Screenshot returned no supported image bytes'),
+      session: response.session,
+      phase: 'view',
+    };
+  }
+  let directory: string | undefined;
+  try {
+    directory = fs.mkdtempSync(join(tmpdir(), 'aieasybrowser-view-'));
+    const imagePath = join(directory, `page.${extensions[mimeType]}`);
+    fs.writeFileSync(imagePath, Buffer.from(data, 'base64'), { flag: 'wx', mode: 0o600 });
+    const { base64Data: _data, base64Length: _length, ...metadata } = result!;
+    return {
+      ...response,
+      result: {
+        ...metadata,
+        imagePath,
+        temporary: true,
+        next: 'Open imagePath with the host image reader to see the page pixels; this is a browser screenshot, not an original-image download.',
+      },
+    };
+  } catch (error) {
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    return {
+      ...browserFailure(
+        'OUTPUT_WRITE_FAILED',
+        `Cannot save temporary view: ${(error as Error).message}`,
+      ),
+      session: response.session,
+      phase: 'view',
+    };
+  }
+}
+
 export function registerBrowserCommands(program: Command): void {
   program
     .option('--session <name>', 'Named browser task session', 'default')
@@ -201,11 +257,12 @@ export function registerBrowserCommands(program: Command): void {
     process.once('SIGINT', cancel);
     process.once('SIGTERM', cancel);
     try {
-      const response = await requestBrowserCommand(
+      let response = await requestBrowserCommand(
         { ...payload, session: options.session, timeoutMs: options.timeout },
         options,
         controller.signal,
       );
+      if (payload.command === 'view') response = materializeView(response);
       process.stdout.write(`${JSON.stringify(response)}\n`);
       process.exitCode = browserExitCode(response);
     } finally {
@@ -284,6 +341,22 @@ export function registerBrowserCommands(program: Command): void {
         frameId: options.frame,
       }),
     );
+  program
+    .command('view')
+    .description(
+      'See page pixels as a temporary image for the host image reader; no original-image downloads',
+    )
+    .option('--selector <css>', 'Capture one image or page region using its CSS selector')
+    .option('--full', 'Capture the full rendered page (lazy images may still need scrolling)')
+    .action((options, command) => {
+      if (options.selector && options.full)
+        throw new InvalidArgumentError('Choose either --selector or --full');
+      return run(command, {
+        command: 'view',
+        selector: options.selector,
+        fullPage: Boolean(options.full),
+      });
+    });
   actionOptions(
     program
       .command('act <json>')

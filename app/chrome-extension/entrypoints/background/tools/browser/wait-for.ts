@@ -9,6 +9,7 @@ import { computerTool } from './computer';
 import { javascriptTool } from './javascript';
 import { waitForNetworkIdle } from './network-idle';
 import type { BrowserToolExecutionContext } from '../browser-session-context';
+import { PAGE_HIDDEN_GUIDANCE, readPageVisibility } from '@/utils/page-visibility';
 
 const WAIT_FOR_TOOL_NAME = TOOL_NAMES.BROWSER.WAIT_FOR || 'chrome_wait_for';
 const ASSERT_TOOL_NAME = TOOL_NAMES.BROWSER.ASSERT || 'chrome_assert';
@@ -81,6 +82,14 @@ interface WaitEvaluation {
   matchedFrameId?: number;
   match?: StringMatchMode;
   state?: ElementWaitState;
+  pageVisibility?: unknown;
+  elementState?: unknown;
+}
+
+class DelegatedWaitError extends Error {
+  constructor(readonly result: ToolResult) {
+    super(getFirstText(result) || 'wait_for failed');
+  }
 }
 
 const PROGRESS_REPORT_INTERVAL_MS = 250;
@@ -179,6 +188,7 @@ function getFirstText(result: ToolResult): string | undefined {
 }
 
 function parseJsonResult(result: ToolResult): Record<string, unknown> | undefined {
+  if (result.structuredContent) return result.structuredContent;
   const text = getFirstText(result);
   if (typeof text !== 'string') return undefined;
 
@@ -219,6 +229,39 @@ abstract class WaitToolsBase extends BaseBrowserToolExecutor {
     return explicit || (await this.getActiveTabOrThrowInWindow(args.windowId));
   }
 
+  protected async conditionFailure(
+    error: unknown,
+    tabId?: number,
+    frameId?: number,
+    prefix = '',
+  ): Promise<ToolResult> {
+    if (error instanceof DelegatedWaitError) {
+      // Do not flatten PAGE_HIDDEN / element-state diagnostics into a plain Error string.
+      return {
+        ...error.result,
+        content: [{ type: 'text', text: prefix + error.message }],
+      };
+    }
+    const message = prefix + (error instanceof Error ? error.message : 'wait_for failed');
+    if (typeof tabId !== 'number' || !message.includes('timed out'))
+      return createErrorResponse(message);
+    const pageVisibility = await readPageVisibility(tabId, frameId);
+    const code = pageVisibility.hidden === true ? 'PAGE_HIDDEN' : undefined;
+    const guidance = code ? PAGE_HIDDEN_GUIDANCE : undefined;
+    const detail = [code, message, guidance].filter(Boolean).join(': ');
+    return {
+      ...createErrorResponse(detail),
+      structuredContent: {
+        success: false,
+        error: detail,
+        reason: 'timeout',
+        code,
+        pageVisibility,
+        guidance,
+      },
+    };
+  }
+
   protected getTimeoutMs(args: WaitForParams): number {
     return Math.max(0, Math.min(Number(args.timeoutMs ?? 10000), 120000));
   }
@@ -238,7 +281,7 @@ abstract class WaitToolsBase extends BaseBrowserToolExecutor {
       : computerTool.execute(args);
     const result = await raceWithAbort(operation, executionContext?.signal);
     if (result.isError) {
-      throw new Error(getFirstText(result) || 'wait_for failed');
+      throw new DelegatedWaitError(result);
     }
 
     await reportProgress(executionContext, 100, 'Browser condition matched');
@@ -536,6 +579,8 @@ return !!value;
       matchedFrameId:
         typeof delegated.matchedFrameId === 'number' ? delegated.matchedFrameId : undefined,
       tookMs: Number(delegated.tookMs || 0),
+      pageVisibility: delegated.pageVisibility,
+      elementState: delegated.elementState,
     };
   }
 
@@ -567,6 +612,8 @@ return !!value;
           observed: delegated.matched,
           matched: delegated.matched,
           tookMs: Number(delegated.tookMs || 0),
+          pageVisibility: delegated.pageVisibility,
+          elementState: delegated.elementState,
         };
       }
       case 'url':
@@ -594,6 +641,8 @@ return !!value;
           observed: delegated.request,
           matched: delegated.request,
           tookMs: Number(delegated.tookMs || 0),
+          pageVisibility: delegated.pageVisibility,
+          elementState: delegated.elementState,
         };
       }
       case 'networkIdle': {
@@ -637,6 +686,8 @@ return !!value;
           observed: delegated.download,
           matched: delegated.download,
           tookMs: Number(delegated.tookMs || 0),
+          pageVisibility: delegated.pageVisibility,
+          elementState: delegated.elementState,
         };
       }
       case 'sleep': {
@@ -666,8 +717,9 @@ class WaitForTool extends WaitToolsBase {
       return createErrorResponse('condition is required for chrome_wait_for');
     }
 
+    let tab: chrome.tabs.Tab | undefined;
     try {
-      const tab = await this.resolveTargetTab(args);
+      tab = await this.resolveTargetTab(args);
       throwIfAborted(executionContext?.signal);
       const result = await this.evaluateCondition(args, tab, executionContext);
       return this.createJsonSuccess({
@@ -678,7 +730,7 @@ class WaitForTool extends WaitToolsBase {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      return createErrorResponse(error instanceof Error ? error.message : 'chrome_wait_for failed');
+      return this.conditionFailure(error, tab?.id, args.frameId);
     }
   }
 }
@@ -699,8 +751,9 @@ class AssertTool extends WaitToolsBase {
       return createErrorResponse('chrome_assert does not support condition.kind="sleep"');
     }
 
+    let tab: chrome.tabs.Tab | undefined;
     try {
-      const tab = await this.resolveTargetTab(args);
+      tab = await this.resolveTargetTab(args);
       throwIfAborted(executionContext?.signal);
       const result = await this.evaluateCondition(args, tab, executionContext);
       return this.createJsonSuccess({
@@ -712,8 +765,7 @@ class AssertTool extends WaitToolsBase {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      const message = error instanceof Error ? error.message : 'assert failed';
-      return createErrorResponse(`assert failed: ${message}`);
+      return this.conditionFailure(error, tab?.id, args.frameId, 'assert failed: ');
     }
   }
 }

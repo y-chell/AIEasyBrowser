@@ -923,12 +923,16 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
   {
     name: TOOL_NAMES.BROWSER.SCREENSHOT,
     description:
-      '[Prefer read_page over taking a screenshot and Prefer chrome_computer] Take a screenshot of the current page or a specific element. For new usage, use chrome_computer with action="screenshot". Use this tool if you need advanced options. Screenshot output can be resized when storeBase64/maxOutputWidth/maxOutputHeight are used; recapture the current viewport before reusing coordinates for clicks.',
+      'Capture rendered page pixels, including images, charts, or one element. For CLI visual reading use view (or view --selector/--full) and open its imagePath with the host image reader. Use this tool for advanced screenshot options. Output may be resized; recapture current geometry before using image coordinates for clicks.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Name for the screenshot, if saving as PNG' },
-        selector: { type: 'string', description: 'CSS selector for element to screenshot' },
+        selector: {
+          type: 'string',
+          description:
+            'CSS selector matching exactly one element in the top document to screenshot',
+        },
         tabId: {
           type: 'number',
           description: 'Target tab ID to capture from (default: active tab).',
@@ -940,7 +944,7 @@ const RAW_TOOL_SCHEMAS: BrowserToolDefinition[] = [
         background: {
           type: 'boolean',
           description:
-            'Attempt capture without bringing tab/window to foreground. CDP-based capture is used for viewport captures and default full-page captures. Full-page captures with custom width/height/maxHeight, and element captures, fall back to helper-based capture. Default: false',
+            'Capture without activating the tab or focusing its window. Default viewport/full-page and element captures use CDP on the selected tab; custom width/height captures use the helper. A CDP capture failure is returned explicitly rather than capturing another active tab. Default: false',
         },
         width: { type: 'number', description: 'Width in pixels (default: 800)' },
         height: { type: 'number', description: 'Height in pixels (default: 600)' },

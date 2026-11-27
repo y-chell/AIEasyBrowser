@@ -87,8 +87,19 @@ function decodeToolResult(result: BrowserToolResult, toolName: string): unknown 
           ? 'NOT_INTERACTABLE'
           : /\bTARGET_CLOSED:/.test(message)
             ? 'TARGET_CLOSED'
-            : 'BROWSER_ERROR';
-    throw new BrowserCommandError(code, message);
+            : /\bPAGE_HIDDEN:/.test(message) ||
+                (isRecord(payload) && payload.code === 'PAGE_HIDDEN')
+              ? 'PAGE_HIDDEN'
+              : 'BROWSER_ERROR';
+    const details =
+      isRecord(payload) && payload.pageVisibility
+        ? {
+            pageVisibility: payload.pageVisibility,
+            ...(payload.elementState ? { elementState: payload.elementState } : {}),
+            ...(payload.guidance ? { guidance: payload.guidance } : {}),
+          }
+        : undefined;
+    throw new BrowserCommandError(code, message, details);
   }
   const attachments = result.content.filter((item) => item.type !== 'text');
   return attachments.length ? { data: payload, attachments } : payload;
@@ -271,7 +282,13 @@ export class BrowserCommandService {
       return {
         ok: false,
         session: command.session,
-        error: { code, message },
+        error: {
+          code,
+          message,
+          ...(cause instanceof BrowserCommandError && cause.details
+            ? { details: cause.details }
+            : {}),
+        },
         ...state,
       };
     } finally {
@@ -415,7 +432,12 @@ export class BrowserCommandService {
       }
       documents.set(frame.frameId, frame.documentId);
       if (frames.length < 20)
-        frames.push({ frameId: frame.frameId, url: frame.url, readyState: frame.readyState });
+        frames.push({
+          frameId: frame.frameId,
+          url: frame.url,
+          readyState: frame.readyState,
+          ...(isRecord(frame.pageVisibility) ? { pageVisibility: frame.pageVisibility } : {}),
+        });
       for (const element of Array.isArray(frame.elements) ? frame.elements : []) {
         if (!isRecord(element) || typeof element.ref !== 'string') continue;
         if (elements.length >= options.limit) {
@@ -498,6 +520,11 @@ export class BrowserCommandService {
     state: WorkflowState,
     signal: AbortSignal,
   ): Promise<unknown> {
+    const deadline = Date.now() + command.timeoutMs;
+    // Leave time for the tool to return its observations before the outer command
+    // deadline aborts it and replaces them with a generic TIMEOUT.
+    const waitBudget = () =>
+      Math.max(1, deadline - Date.now() - Math.min(1000, Math.ceil(command.timeoutMs * 0.2)));
     switch (command.command) {
       case 'health': {
         const health = await this.invoke(session, 'chrome_health', {}, signal);
@@ -531,12 +558,21 @@ export class BrowserCommandService {
         const selected = tabs.find((tab: any) => tab.tabId === command.tabId);
         if (!selected)
           throw new BrowserCommandError('TARGET_CLOSED', `Tab ${command.tabId} is not open`);
-        if (command.focus)
-          await this.invoke(session, 'chrome_switch_tab', { tabId: command.tabId }, signal);
+        const focused = command.focus
+          ? await this.invoke(session, 'chrome_switch_tab', { tabId: command.tabId }, signal)
+          : undefined;
         signal.throwIfAborted();
         this.invalidate(session);
         session.tabId = command.tabId;
-        return selected;
+        return {
+          ...selected,
+          ...(isRecord(focused) && focused.focusVerification
+            ? {
+                focusVerification: focused.focusVerification,
+                active: focused.active ?? selected.active,
+              }
+            : {}),
+        };
       }
       case 'open': {
         const tabId = command.current ? this.target(session) : undefined;
@@ -561,6 +597,29 @@ export class BrowserCommandService {
           text: command.text,
           frameId: command.frameId,
         });
+      case 'view': {
+        if (command.selector && command.fullPage)
+          throw new BrowserCommandError('INVALID_ARGUMENT', 'Choose either --selector or --full');
+        const tabId = this.target(session);
+        this.invalidate(session);
+        return this.invoke(
+          session,
+          'chrome_screenshot',
+          {
+            tabId,
+            background: true,
+            storeBase64: true,
+            savePng: false,
+            fullPage: command.fullPage,
+            ...(command.selector ? { selector: command.selector } : {}),
+            imageFormat: 'image/jpeg',
+            quality: 0.9,
+            maxOutputWidth: 1600,
+            maxOutputHeight: command.fullPage ? 3200 : 1600,
+          },
+          signal,
+        );
+      }
       case 'act': {
         const tabId = this.target(session);
         // Resolve the whole batch before sending any action, so malformed/foreign refs cannot cause partial execution.
@@ -619,7 +678,7 @@ export class BrowserCommandService {
           expectation = await this.invoke(
             session,
             'chrome_assert',
-            { tabId, condition: command.expect, timeoutMs: command.timeoutMs },
+            { tabId, condition: command.expect, timeoutMs: waitBudget() },
             signal,
           );
         }
@@ -642,7 +701,7 @@ export class BrowserCommandService {
             tabId,
             frameId: command.frameId,
             condition: command.condition,
-            timeoutMs: command.timeoutMs,
+            timeoutMs: waitBudget(),
           },
           signal,
         );

@@ -228,6 +228,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
       let resolved = false;
       let sawTimeout = false;
       let firstError: string | undefined;
+      let failureResponse: any;
 
       const finish = (result: {
         success: boolean;
@@ -251,6 +252,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
             }
 
             settled += 1;
+            if (!failureResponse || response?.code === 'PAGE_HIDDEN') failureResponse = response;
             if (response?.reason === 'timeout') {
               sawTimeout = true;
             } else if (!firstError) {
@@ -262,6 +264,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
                 success: false,
                 reason: sawTimeout ? 'timeout' : 'error',
                 error: firstError,
+                response: failureResponse,
               });
             }
           })
@@ -276,6 +279,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
                 success: false,
                 reason: sawTimeout ? 'timeout' : 'error',
                 error: firstError,
+                response: failureResponse,
               });
             }
           });
@@ -314,6 +318,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
 
     let sawTimeout = false;
     let firstError: string | undefined;
+    let failureResponse: any;
     let lastSuccessFrameId: number | undefined;
     let lastSuccessResponse: any;
 
@@ -324,6 +329,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
         continue;
       }
 
+      if (!failureResponse || result.response?.code === 'PAGE_HIDDEN') {
+        failureResponse = result.response;
+      }
       if (result.response?.reason === 'timeout') {
         sawTimeout = true;
         continue;
@@ -336,10 +344,10 @@ class ComputerTool extends BaseBrowserToolExecutor {
     }
 
     if (firstError) {
-      return { success: false, reason: 'error', error: firstError };
+      return { success: false, reason: 'error', error: firstError, response: failureResponse };
     }
     if (sawTimeout) {
-      return { success: false, reason: 'timeout' };
+      return { success: false, reason: 'timeout', response: failureResponse };
     }
 
     return {
@@ -368,6 +376,28 @@ class ComputerTool extends BaseBrowserToolExecutor {
     const hasNetworkCondition =
       params.network === true || !!urlPattern || !!method || hasStatusCondition;
 
+    const waitFailure = (message: string, response: any): ToolResult => {
+      const elementHint =
+        response?.elementState?.exists && response.elementState.visible === false
+          ? `Element remains in the DOM but is not visible (${response.elementState.hiddenReason || 'hidden'})`
+          : undefined;
+      const detail = [response?.code, message, elementHint, response?.guidance]
+        .filter(Boolean)
+        .join(': ');
+      return {
+        ...createErrorResponse(detail),
+        structuredContent: {
+          success: false,
+          error: detail,
+          code: response?.code,
+          reason: response?.reason,
+          pageVisibility: response?.pageVisibility,
+          elementState: response?.elementState,
+          guidance: response?.guidance,
+        },
+      };
+    };
+
     if (hasTextCondition) {
       const frameIds = await this.getWaitFrameIds(tab.id!, frameId, false);
       try {
@@ -391,10 +421,11 @@ class ComputerTool extends BaseBrowserToolExecutor {
           frameId,
         );
         if (!resp || resp.success !== true) {
-          return createErrorResponse(
+          return waitFailure(
             resp && resp.reason === 'timeout'
               ? `wait_for timed out after ${timeoutMs}ms for text: ${params.text}`
               : `wait_for failed: ${resp && resp.error ? resp.error : 'unknown error'}`,
+            resp,
           );
         }
         return this.createJsonSuccess({
@@ -405,6 +436,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
           text: params.text,
           matched: resp.matched || null,
           tookMs: resp.tookMs,
+          pageVisibility: resp.pageVisibility,
         });
       } catch (e) {
         return createErrorResponse(
@@ -414,9 +446,13 @@ class ComputerTool extends BaseBrowserToolExecutor {
     }
 
     if (params.ref || params.selector) {
-      const useClickableWait = !!params.ref || params.clickable === true;
-      const selectorType = params.selectorType || 'css';
       const visible = params.visible !== false;
+      // Keep legacy ref-only waits clickable, while honoring explicit visible/hidden state.
+      const useClickableWait =
+        visible &&
+        (params.clickable === true ||
+          (!!params.ref && params.clickable === undefined && params.visible === undefined));
+      const selectorType = params.selectorType || 'css';
       const shouldSearchAllFrames = typeof frameId !== 'number' && !params.ref;
       const frameIds = await this.getWaitFrameIds(tab.id!, frameId, shouldSearchAllFrames);
       try {
@@ -439,6 +475,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               }
             : {
                 action: TOOL_MESSAGE_TYPES.WAIT_FOR_SELECTOR,
+                ref: params.ref,
                 selector: params.selector,
                 isXPath: selectorType === 'xpath',
                 visible,
@@ -455,10 +492,11 @@ class ComputerTool extends BaseBrowserToolExecutor {
             const summary = useClickableWait
               ? `clickable target: ${target}`
               : `${visible ? 'visible' : 'hidden'} selector: ${target}`;
-            return createErrorResponse(`wait_for timed out after ${timeoutMs}ms for ${summary}`);
+            return waitFailure(`wait_for timed out after ${timeoutMs}ms for ${summary}`, resp);
           }
-          return createErrorResponse(
+          return waitFailure(
             `wait_for failed: ${waitResult.error || (resp && resp.error ? resp.error : 'unknown error')}`,
+            resp,
           );
         }
         return this.createJsonSuccess({
@@ -472,6 +510,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
           matched: resp.matched || null,
           matchedFrameId: waitResult.frameId,
           tookMs: resp.tookMs,
+          pageVisibility: resp.pageVisibility,
+          elementState: resp.elementState,
         });
       } catch (e) {
         return createErrorResponse(

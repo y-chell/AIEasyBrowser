@@ -168,6 +168,18 @@ aieasybrowser --session demo click <ref> --expect '{"kind":"text","text":"Result
 
 日常使用时，这些命令由 Agent 按 Skill 里的规则发出，包括怎么选目标、引用什么时候失效、失败后能不能重试。人一般只需要说明任务，再看结果。
 
+### 查看页面里的图片
+
+`scan` 和正文提取返回 DOM 文本；查看图片、图表或图文帖子时，Agent 可以直接截取当前页面的渲染画面：
+
+```powershell
+aieasybrowser --session research view
+aieasybrowser --session research view --selector '#post_1 .cooked'
+aieasybrowser --session research view --full
+```
+
+`view` 返回临时截图的 `imagePath`，Agent 用宿主的图像读取工具打开即可看见页面像素，不必逐张下载原图。默认截取选定标签的当前视口，`--selector` 截取唯一匹配的图片或区域，`--full` 返回有尺寸上限的整页概览。懒加载图片须先滚动到页面实际加载，细小文字可再对局部截图。CLI stdout 本身只有 JSON；图像理解需要宿主提供图片读取能力并使用支持视觉的模型。临时截图用完后可删除，原图下载仍用于确实需要保存原文件的任务。
+
 ## 已知限制
 
 - 没有 JS 覆盖率和 heap snapshot：Chrome 不向扩展开放 Profiler 和 HeapProfiler。CSS 覆盖率、CPU profile 和按构造器的实例计数可以用。

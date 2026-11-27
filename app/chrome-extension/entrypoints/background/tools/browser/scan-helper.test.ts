@@ -219,6 +219,25 @@ function ids(result: any): string[] {
 }
 
 describe('compact scan discovery before truncation', () => {
+  test.each([true, false])(
+    'reports document visibility without hiding the scan: hidden=%s',
+    (hidden) => {
+      const page = fixture();
+      Object.assign(page.document, {
+        hidden,
+        visibilityState: hidden ? 'hidden' : 'visible',
+        hasFocus: () => true,
+      });
+      page.document.body.append(page.element('button', 'control'));
+      const result = page.scan();
+      expect(result.pageVisibility).toEqual({
+        hidden,
+        visibilityState: hidden ? 'hidden' : 'visible',
+        hasFocus: true,
+      });
+      expect(ids(result)).toEqual(['control']);
+    },
+  );
   test.each([40, 160])(
     'finds screen content after 180 off-canvas menu links at limit %s',
     (limit) => {
