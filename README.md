@@ -178,6 +178,12 @@ aieasybrowser --session research view --full
 
 `view` returns a temporary screenshot `imagePath` for the host's image reader, without downloading individual source images. The default captures the selected tab's viewport; `--selector` captures exactly one image or region; `--full` produces a bounded full-page overview. Scroll first to load lazy images, and use a region capture when small text needs more detail. CLI stdout is JSON, so visual understanding still requires a vision-capable model and a host image reader. Remove temporary screenshots after inspection unless they need to be kept.
 
+### Remote operation after Windows display idle-off
+
+On Windows, the Native bridge requests `SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)` through a PowerShell 7 helper before sending browser tool calls. This wakes an idle-powered-off display and holds it during execution. The request is released after 30 seconds without active calls; the configured display timeout is unchanged. A task started remotely from a phone does not require moving the PC mouse first.
+
+The bridge environment must have `pwsh` available. A helper startup or acknowledgement failure returns `DISPLAY_WAKE_FAILED` before sending the browser action. This covers display idle-off, not unlocking a session or waking a sleeping PC. Background tabs still follow Chrome's visibility rules; use `use --focus` when an operation depends on visible animation.
+
 ## Known limitations
 
 - No JavaScript coverage or heap snapshot: Chrome does not give extensions the Profiler or HeapProfiler domains. CSS coverage, CPU profiles, and per-constructor instance counts work.

@@ -7,6 +7,15 @@ import { BrowserCommandService } from './command-service';
 import { BrowserCommandError } from './protocol';
 import { TOOL_SCHEMAS } from 'aieasybrowser-shared';
 import { setLogDirForTests } from '../util/diag-log';
+import { DisplayWakeError, withDisplayAwake } from './display-awake';
+
+jest.mock('./display-awake', () => ({
+  ...jest.requireActual<typeof import('./display-awake')>('./display-awake'),
+  withDisplayAwake: jest.fn(async (run: () => Promise<unknown>, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    return run();
+  }),
+}));
 
 // ts-jest has no compiled worker.js; run analysis jobs in the test thread.
 jest.mock('../analysis/runner', () => ({
@@ -92,6 +101,13 @@ const run = (command: Record<string, unknown>, signal = new AbortController().si
   service.execute({ session: 'task', ...command }, signal);
 
 beforeEach(() => {
+  jest
+    .mocked(withDisplayAwake)
+    .mockReset()
+    .mockImplementation(async (run, signal) => {
+      signal?.throwIfAborted();
+      return run();
+    });
   defaultReply = async ({ name, args }) => {
     if (name === 'get_windows_and_tabs')
       return success({
@@ -128,6 +144,83 @@ async function selectedScan(session = 'task') {
 }
 
 describe('named CLI browser workflows', () => {
+  test('acquires display activity before dispatch and leaves metadata commands local', async () => {
+    await run({ command: 'describe', tool: 'chrome_screenshot' });
+    await run({ command: 'tools', query: 'screenshot' });
+    expect(withDisplayAwake).not.toHaveBeenCalled();
+    const ordering: string[] = [];
+    jest.mocked(withDisplayAwake).mockImplementation(async (task) => {
+      ordering.push('awake');
+      const result = await task();
+      ordering.push('release');
+      return result;
+    });
+    send.mockImplementation(async (payload) => {
+      ordering.push('browser');
+      return defaultReply(payload);
+    });
+    expect((await run({ command: 'health' })).ok).toBe(true);
+    expect(ordering).toEqual(['awake', 'browser', 'release']);
+  });
+
+  test('a failed display wake prevents browser IO and reports not_started', async () => {
+    await run({ command: 'use', tabId: 7 });
+    send.mockClear();
+    jest
+      .mocked(withDisplayAwake)
+      .mockRejectedValueOnce(new DisplayWakeError('display helper failed'));
+    expect(await run({ command: 'eval', code: 'sideEffect()' })).toMatchObject({
+      ok: false,
+      error: { code: 'DISPLAY_WAKE_FAILED' },
+      actionStatus: 'not_started',
+      completed: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test('preserves partial action counts if display wake fails before a later action', async () => {
+    const ref = await selectedScan();
+    send.mockClear();
+    jest
+      .mocked(withDisplayAwake)
+      .mockImplementationOnce(async (task) => task())
+      .mockRejectedValueOnce(new DisplayWakeError('worker exited'));
+    expect(
+      await run({
+        command: 'act',
+        actions: [
+          { op: 'click', ref },
+          { op: 'click', ref },
+        ],
+        scan: false,
+      }),
+    ).toMatchObject({
+      error: { code: 'DISPLAY_WAKE_FAILED' },
+      completed: 1,
+      actionStatus: 'partial',
+      failedAction: 1,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  test('keeps actionStatus unknown if the display helper is lost after dispatch', async () => {
+    const ref = await selectedScan();
+    send.mockClear();
+    jest.mocked(withDisplayAwake).mockImplementationOnce(async (task) => {
+      await task();
+      throw Object.assign(new DisplayWakeError('worker lost during browser IO'), {
+        code: 'DISPLAY_WAKE_LOST',
+      });
+    });
+    expect(
+      await run({ command: 'act', actions: [{ op: 'click', ref }], scan: false }),
+    ).toMatchObject({
+      error: { code: 'DISPLAY_WAKE_LOST' },
+      actionStatus: 'unknown',
+      completed: 0,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   test.each(['STALE_REF', 'NOT_INTERACTABLE'])(
     'reports helper rejection %s before action as not_started',
     async (code) => {

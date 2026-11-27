@@ -20,6 +20,7 @@ import {
 } from './tool-dispatch';
 import { logger, startTimer } from '../util/diag-log';
 import { AnalysisError, isAnalysisTool, runAnalysisTool } from '../analysis';
+import { DisplayWakeError, withDisplayAwake } from './display-awake';
 
 interface ElementTarget {
   ref: string;
@@ -243,7 +244,7 @@ export class BrowserCommandService {
       const cause = signal.aborted ? signal.reason : error;
       const message = errorMessage(cause);
       const code =
-        cause instanceof BrowserCommandError
+        cause instanceof BrowserCommandError || cause instanceof DisplayWakeError
           ? cause.code
           : cause instanceof ToolInputError
             ? 'INVALID_ARGUMENT'
@@ -263,6 +264,7 @@ export class BrowserCommandService {
           'INVALID_ARGUMENT',
           'NO_TARGET',
           'BRIDGE_UNAVAILABLE',
+          'DISPLAY_WAKE_FAILED',
         ].includes(code) &&
         state.actionStatus === 'unknown'
       ) {
@@ -333,19 +335,23 @@ export class BrowserCommandService {
       hasDocumentId: Boolean(documentId),
     });
     try {
-      const result = await withSignal(
-        dispatchBrowserTool(
-          host,
-          name,
-          args,
-          {
-            transport: 'cli',
-            sessionId: `cli:${session.id}`,
-            requestId: nativeRequestId,
-            documentId,
-          },
-          { signal, requestId: nativeRequestId },
-        ),
+      const result = await withDisplayAwake(
+        () =>
+          withSignal(
+            dispatchBrowserTool(
+              host,
+              name,
+              args,
+              {
+                transport: 'cli',
+                sessionId: `cli:${session.id}`,
+                requestId: nativeRequestId,
+                documentId,
+              },
+              { signal, requestId: nativeRequestId },
+            ),
+            signal,
+          ),
         signal,
       );
       signal.throwIfAborted();
@@ -377,7 +383,7 @@ export class BrowserCommandService {
         frameId,
         durationMs: elapsed(),
         code:
-          cause instanceof BrowserCommandError
+          cause instanceof BrowserCommandError || cause instanceof DisplayWakeError
             ? cause.code
             : cause instanceof Error && cause.name === 'AbortError'
               ? 'CANCELLED'

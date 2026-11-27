@@ -16,6 +16,7 @@ beforeEach(() => {
   jest.mocked(fs.readdirSync).mockReturnValue(['old.js', 'mcp'] as any);
   jest.mocked(fs.rmSync).mockReturnValue(undefined);
   jest.mocked(fs.existsSync).mockReturnValue(true);
+  jest.mocked(fs.copyFileSync).mockReset();
   jest.spyOn(console, 'log').mockImplementation(() => undefined);
 });
 
@@ -39,6 +40,10 @@ describe('native build output cleanup', () => {
     expect(fs.rmSync).not.toHaveBeenCalledWith(distDir, expect.anything());
     expect(execSync).toHaveBeenCalledWith('tsc', { stdio: 'inherit' });
     expect(writeNodePathFile).toHaveBeenCalledWith(distDir, process.execPath);
+    expect(fs.copyFileSync).toHaveBeenCalledWith(
+      path.join(__dirname, 'display-awake.ps1'),
+      path.join(distDir, 'scripts', 'display-awake.ps1'),
+    );
     expect(
       jest
         .mocked(fs.copyFileSync)
@@ -54,6 +59,14 @@ describe('native build output cleanup', () => {
     expect(fs.mkdirSync).toHaveBeenCalledWith(distDir, { recursive: true });
     expect(fs.rmSync).not.toHaveBeenCalled();
     expect(execSync).toHaveBeenCalledTimes(1);
+  });
+
+  test('fails the build if the required display helper cannot be packaged', () => {
+    jest.mocked(fs.copyFileSync).mockImplementation((source) => {
+      if (String(source).endsWith('display-awake.ps1')) throw new Error('ENOENT display helper');
+    });
+    expect(runBuild).toThrow('ENOENT display helper');
+    expect(writeNodePathFile).not.toHaveBeenCalled();
   });
 
   test('stops before compilation if stale output cannot be deleted', () => {

@@ -180,6 +180,12 @@ aieasybrowser --session research view --full
 
 `view` 返回临时截图的 `imagePath`，Agent 用宿主的图像读取工具打开即可看见页面像素，不必逐张下载原图。默认截取选定标签的当前视口，`--selector` 截取唯一匹配的图片或区域，`--full` 返回有尺寸上限的整页概览。懒加载图片须先滚动到页面实际加载，细小文字可再对局部截图。CLI stdout 本身只有 JSON；图像理解需要宿主提供图片读取能力并使用支持视觉的模型。临时截图用完后可删除，原图下载仍用于确实需要保存原文件的任务。
 
+### Windows 息屏后的远程操作
+
+在 Windows 上，桥接器会在发送浏览器工具调用前，通过 PowerShell 7 的本机辅助进程请求 `SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)`。这会自动唤醒因空闲关闭的显示器，并在工具执行期间保持显示；最后一次调用结束、空闲 30 秒后释放请求。通过手机远程发起任务时无需先移动电脑鼠标，原有显示器关闭时间设置保持不变。
+
+这项功能需要桥接器环境能运行 `pwsh`。唤醒失败会在发送浏览器动作前返回 `DISPLAY_WAKE_FAILED`，不会把未执行的动作报告为成功。它处理显示器自动息屏，不负责解除锁屏或唤醒已经休眠的电脑。正常后台标签仍按 Chrome 自身规则运行，需要可见动画时使用 `use --focus`。
+
 ## 已知限制
 
 - 没有 JS 覆盖率和 heap snapshot：Chrome 不向扩展开放 Profiler 和 HeapProfiler。CSS 覆盖率、CPU profile 和按构造器的实例计数可以用。

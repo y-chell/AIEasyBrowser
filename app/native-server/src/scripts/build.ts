@@ -69,6 +69,13 @@ try {
   console.error('复制包装脚本时出错:', error);
 }
 
+// The Windows display helper is required at runtime; a missing copy must fail the build.
+fs.mkdirSync(path.join(distDir, 'scripts'), { recursive: true });
+fs.copyFileSync(
+  path.join(__dirname, 'display-awake.ps1'),
+  path.join(distDir, 'scripts', 'display-awake.ps1'),
+);
+
 // 为关键JavaScript文件和macOS包装脚本添加可执行权限
 console.log('添加可执行权限...');
 const filesToMakeExecutable = ['index.js', 'cli.js', 'run_host.sh']; // cli.js 假设在 dist 根目录

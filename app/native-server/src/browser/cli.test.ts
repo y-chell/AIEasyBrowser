@@ -13,6 +13,11 @@ import {
   requestBrowserCommand,
 } from './cli';
 
+jest.mock('./display-awake', () => ({
+  ...jest.requireActual<typeof import('./display-awake')>('./display-awake'),
+  withDisplayAwake: async (run: () => Promise<unknown>) => run(),
+}));
+
 const fetchMock = jest.fn<typeof fetch>();
 let stdout: jest.SpiedFunction<typeof process.stdout.write>;
 const previousExitCode = process.exitCode;
